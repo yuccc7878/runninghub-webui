@@ -1,0 +1,20 @@
+# ---- Python ----
+__pycache__/
+*.pyc
+
+# ---- 运行时产物（不入库） ----
+workflows/webui_out/
+workflows/webui_state.json
+workflows/api_key.json
+workflows/webui_server.log
+workflows/*.pid
+workflows/_check.js
+workflows/_embedded_scripts.js
+workflows/_video_prompt.json
+workflows/_recon/
+refs/*
+!refs/.gitkeep
+
+# ---- 密钥/本地配置 ----
+*.key
+.env
