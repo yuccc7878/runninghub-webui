@@ -7,7 +7,6 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
-# 项目根目录 = 本脚本的上一级（可移植，不依赖具体安装路径）
 BASE = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = BASE / "scripts"
 REFS_DIR = BASE / "refs"
@@ -294,6 +293,33 @@ def _clean_polished(content):
     s = _re.sub(r"[（(]完[)）]\.?$", "", s).strip()
     s = _re.sub(r"(希望你喜欢|以上就是|就这样|希望能帮到你|如你所愿|建议直接使用)[！!。.]*$", "", s).strip()
     return s.strip()
+
+
+def _backend_status():
+    """后端运行状态：PID、端口、Python 版本、启动时间、配置路径。"""
+    try:
+        import datetime
+        py_ver = sys.version.split()[0]
+        started = datetime.datetime.fromtimestamp(START_TIME).strftime("%Y-%m-%d %H:%M:%S")
+        return {
+            "ok": True, "pid": os.getpid(), "port": PORT,
+            "python": py_ver, "started": started,
+            "base": str(BASE), "tasks": len(TASKS),
+            "mode": "android" if os.environ.get("ANDROID_ROOT") else "local",
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _restart_backend():
+    """重启后端：先优雅关掉当前 server（由调用方在子线程做），再用 os.execv 替换进程。"""
+    # 标记需要重启，由 do_POST 返回前触发（避免重启后响应丢失）
+    _RESTART_FLAG[0] = True
+    return {"ok": True, "msg": "后端即将重启，页面会自动重连"}
+
+
+START_TIME = time.time()
+_RESTART_FLAG = [False]
 
 
 def _polish_prompt(prompt_text, kind, llm):
@@ -813,6 +839,8 @@ class Handler(BaseHTTPRequestHandler):
                     "style": llm["style"],
                 },
             })
+        elif path == "/api/backend":
+            self._send(200, _backend_status())
         elif path == "/api/tasks":
             with _lock:
                 t = {k: {kk: vv for kk, vv in v.items() if kk != "trace"} for k, v in TASKS.items()}
@@ -993,6 +1021,30 @@ class Handler(BaseHTTPRequestHandler):
                 TASKS.clear()
             _save_state()
             self._send(200, {"ok": True})
+        elif path == "/api/backend/restart":
+            self._send(200, _restart_backend())
+            # 返回响应后延迟重启：spawn 新进程（独立会话）再退出旧进程，保证新进程存活
+            def _do_restart():
+                time.sleep(0.8)
+                try:
+                    import subprocess as _sp
+                    # Chaquopy 环境没有独立 python 解释器，不能 spawn；提示用户重开 app
+                    if os.environ.get("ANDROID_ROOT") or "chaquopy" in str(sys.prefix).lower():
+                        print("[android] 重启后端请重新打开 App（Chaquopy 内嵌环境不支持进程替换）")
+                        return
+                    log_f = open(str(BASE / "workflows" / "webui_server.log"), "ab")
+                    args = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
+                    _sp.Popen(args, stdout=log_f, stderr=log_f,
+                              start_new_session=True, cwd=str(BASE))
+                    log_f.close()
+                except Exception:
+                    pass
+                try:
+                    if not (os.environ.get("ANDROID_ROOT") or "chaquopy" in str(sys.prefix).lower()):
+                        os._exit(0)
+                except Exception:
+                    pass
+            threading.Thread(target=_do_restart, daemon=True).start()
         else:
             self._send(404, {"error": "not found"})
 

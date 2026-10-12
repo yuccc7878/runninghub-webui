@@ -2,9 +2,9 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<meta name="version" content="v0.4.2">
+<meta name="version" content="v0.4.3">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>洛宝跑图台 v0.4.2 · RunningHub WebUI</title>
+<title>洛宝跑图台 v0.4.3 · RunningHub WebUI</title>
 <style>
 :root{--bg:#0f1115;--card:#171a21;--line:#262b36;--tx:#e6e9ef;--dim:#8b93a7;--acc:#e0a03c;--ok:#4caf7d;--err:#e0564c;}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -118,7 +118,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 </style>
 </head>
 <body>
-<h1>洛宝<span>跑图台</span> <span class="ver">v0.4.2</span></h1>
+<h1>洛宝<span>跑图台</span> <span class="ver">v0.4.3</span></h1>
 <div class="sub">RunningHub 本地统一出图 · Zimage / Krea2 · 任务异步 · 出图直显 <span id="verInfo" style="margin-left:8px;color:var(--acc)"></span></div>
 
 <div class="topbar">
@@ -132,6 +132,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
   <div style="display:flex;gap:6px;margin:10px 0">
     <button class="settab active" data-tab="rh" onclick="switchSetTab('rh')">RunningHub</button>
     <button class="settab" data-tab="llm" onclick="switchSetTab('llm')">LLM 润色</button>
+    <button class="settab" data-tab="be" onclick="switchSetTab('be')">后端</button>
   </div>
 
   <div id="setpanel-rh">
@@ -158,6 +159,13 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
       <option value="tags">输出风格：英文逗号 tags</option>
       <option value="brief">输出风格：简练关键词</option>
     </select>
+  </div>
+
+  <div id="setpanel-be" style="display:none">
+    <div class="hint" style="margin:4px 0 8px">后端服务运行状态。若页面提示"后端未连接"，可在此查看状态或手动重启。</div>
+    <div id="beStatus" style="font-size:12px;color:var(--dim);margin:4px 0;white-space:pre-wrap;line-height:1.8"></div>
+    <button class="btn" style="margin-top:10px;width:100%;padding:8px" onclick="restartBackend()">🔁 重启后端</button>
+    <div class="hint" style="margin-top:8px">重启后页面会自动重连，历史任务保留。</div>
   </div>
 
   <div style="display:flex;gap:8px;margin-top:14px">
@@ -504,7 +512,7 @@ async function submit(){
       body:JSON.stringify({script:CUR,params})});
     if(r.task_id){toast('已提交 '+r.task_id);refreshTasks()}else toast('提交失败: '+(r.error||''))
   }catch(e){
-    toast('后端未连接！请确保服务已启动: python scripts/rh_webui.py --port 8765');
+    toast('后端未连接！请确保服务已启动: python scripts/rh_webui.py --port 8770');
   }
 }
 
@@ -691,6 +699,8 @@ function switchSetTab(tab){
   document.querySelectorAll('.settab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   $('setpanel-rh').style.display=tab==='rh'?'block':'none';
   $('setpanel-llm').style.display=tab==='llm'?'block':'none';
+  $('setpanel-be').style.display=tab==='be'?'block':'none';
+  if(tab==='be') refreshBackendStatus();
 }
 
 async function loadSettings(){
@@ -717,6 +727,54 @@ async function loadSettings(){
     $('llmStyle').value=llm.style||'natural';
   }catch(e){
     $('keyStatus').textContent='后端未连接';
+  }
+}
+
+async function refreshBackendStatus(){
+  const el=$('beStatus');
+  el.textContent='查询中…';
+  el.style.color='var(--dim)';
+  try{
+    const d=await api('/api/backend');
+    if(d.ok){
+      const mode=d.mode==='android'?'📱 App 内嵌':'🖥 本地服务';
+      el.innerHTML=`${mode}\n🟢 运行中 · PID ${d.pid}\n端口 ${d.port} · Python ${d.python}\n启动于 ${d.started}\n任务 ${d.tasks} 条`;
+      el.style.color='var(--ok)';
+    }else{
+      el.textContent='后端异常: '+(d.error||'');
+      el.style.color='var(--err)';
+    }
+  }catch(e){
+    el.textContent='❌ 后端未连接——服务可能未启动';
+    el.style.color='var(--err)';
+  }
+}
+
+async function restartBackend(){
+  const btn=event.target;
+  const old=btn.textContent;
+  btn.disabled=true;
+  btn.textContent='重启中…';
+  try{
+    const d=await api('/api/backend/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    if(d.ok){
+      toast('后端重启中，稍后自动重连…');
+      // 等服务重启后刷新状态
+      setTimeout(refreshBackendStatus, 2500);
+      setTimeout(refreshBackendStatus, 5000);
+      setTimeout(refreshBackendStatus, 8000);
+    }else{
+      toast('重启失败: '+(d.error||''));
+    }
+  }catch(e){
+    // 重启时连接会断，属正常——稍后自动重连
+    toast('后端正在重启，稍候…');
+    setTimeout(refreshBackendStatus, 2500);
+    setTimeout(refreshBackendStatus, 5000);
+    setTimeout(refreshBackendStatus, 8000);
+  }finally{
+    btn.disabled=false;
+    btn.textContent=old;
   }
 }
 
