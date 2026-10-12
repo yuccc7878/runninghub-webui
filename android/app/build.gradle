@@ -33,6 +33,21 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // CI 注入签名（ANDROID_KEYSTORE_B64 / PASS / ALIAS），本地无则跳过
+            def ksB64 = System.getenv('ANDROID_KEYSTORE_B64')
+            def ksPass = System.getenv('ANDROID_KEYSTORE_PASS')
+            def ksAlias = System.getenv('ANDROID_KEY_ALIAS')
+            if (ksB64 && ksPass && ksAlias) {
+                signingConfig signingConfigs.create('release') {
+                    def f = new File("${rootProject.projectDir}/release.jks")
+                    f.bytes = Base64.getDecoder().decode(ksB64)
+                    storeFile f
+                    storePassword ksPass
+                    keyAlias ksAlias
+                    keyPassword ksPass
+                }
+                signingConfig signingConfigs.release
+            }
         }
     }
 
