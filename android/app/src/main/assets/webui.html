@@ -245,8 +245,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
       <button class="btn" id="polishBtn" style="margin:0;flex:1;padding:6px 12px;font-size:12px" onclick="polishPrompt()">✨ AI 润色</button>
       <button class="btn" id="revertBtn" style="margin:0;padding:6px 12px;font-size:12px;background:#3a3f4b" onclick="revertPrompt()" title="撤销上次润色">↩ 撤销</button>
     </div>
-    <textarea id="prompt" placeholder="输入画面描述…（自动前置洛宝外貌锚点，可关）"></textarea>
-    <label><input type="checkbox" id="luobao" checked style="width:auto;margin-right:6px">自动拼接洛宝锚点</label>
+    <textarea id="prompt" placeholder="输入画面描述…（AI 润色自动注入洛宝锚点）"></textarea>
     <input type="hidden" id="lastRawPrompt" value="">
   </div>
 <div class="card">
@@ -498,7 +497,7 @@ async function uploadRef(){
 
 async function submit(){
   const v=SCRIPTS[CUR];
-  const params={ref_image:CUR_REF,luobao:$('luobao').checked,prompt:$('prompt').value};
+  const params={ref_image:CUR_REF,prompt:$('prompt').value};
   v.params.forEach(p=>{const el=$('p_'+p.k);if(el)params[p.k]=el.value});
   try{
     const r=await api('/api/submit',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -578,7 +577,7 @@ function openPreview(t){
   if(t.params){
     const p=t.params;
     if(p.prompt)info.push(`提示词：${p.prompt}`);
-    const kv=Object.entries(p).filter(([k])=>!['prompt','ref_image','luobao'].includes(k)&&p[k]!=='');
+    const kv=Object.entries(p).filter(([k])=>!['prompt','ref_image'].includes(k)&&p[k]!=='');
     if(kv.length)info.push('参数：'+kv.map(([k,v])=>`${k}=${v}`).join(' · '));
   }
   if(t.pid)info.push(`prompt_id: ${t.pid}`);
@@ -608,7 +607,7 @@ async function rerunTask(id){
   const lines=[];
   lines.push(`<b>脚本</b>：${(SCRIPTS[script]&&SCRIPTS[script].name)||script}`);
   if(p.prompt)lines.push(`<b>提示词</b>：${p.prompt.slice(0,120)}${p.prompt.length>120?'…':''}`);
-  const kv=Object.entries(p).filter(([k])=>!['prompt','ref_image','luobao'].includes(k)&&p[k]!=='');
+  const kv=Object.entries(p).filter(([k])=>!['prompt','ref_image'].includes(k)&&p[k]!=='');
   if(kv.length)lines.push(`<b>参数</b>：${kv.map(([k,v])=>`${k}=${v}`).join(' · ')}`);
   if(t.cost&&t.cost.coins)lines.push(`<b>上次花费</b>：约 ${t.cost.coins} 币`);
   lines.push('<span style="color:var(--err)">⚠ 重跑会消耗 RunningHub 点数，确认继续？</span>');

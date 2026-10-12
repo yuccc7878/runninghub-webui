@@ -483,11 +483,6 @@ REGISTRY = {
     },
 }
 
-LUOXUE_ANCHOR = ("棕色双麻花辫发型，两条麻花辫垂在胸前两侧，棕色头发，发尾微卷，齐刘海，"
-    "中国女性，东方亚洲面孔，黄皮肤，二十多岁东亚女性，"
-    "脸型小巧精致轮廓柔和流畅，五官秀气协调，眼睛大小自然，鼻型精致，嘴唇柔软，"
-    "肌肤白皙细腻并保留真实皮肤质感，丰满巨乳，成熟少妇感温柔慵懒妩媚。")
-
 
 def _load_module(name):
     if name in sys.modules:
@@ -548,8 +543,6 @@ def _run_task(task_id, script_key, params):
             except Exception:
                 pass
         prompt = params.get("prompt", "")
-        if params.get("luobao", True):
-            prompt = LUOXUE_ANCHOR + "\n" + prompt
 
         if script_key in ("h3_flf_video", "h3_omni_video"):
             seed_s = str(params.get("seed") or "").strip()
