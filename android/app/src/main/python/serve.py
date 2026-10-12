@@ -28,9 +28,14 @@ def start(root: str):
 
     def _serve():
         from http.server import ThreadingHTTPServer
-        # 绑 IPv4 loopback；前端 API_BASE 固定用 127.0.0.1（IPv4），保证必通
-        server = ThreadingHTTPServer(("127.0.0.1", rh_webui.PORT), rh_webui.Handler)
-        server.serve_forever()
+        try:
+            # 绑 IPv4 loopback；前端 API_BASE 固定用 127.0.0.1（IPv4），保证必通
+            server = ThreadingHTTPServer(("127.0.0.1", rh_webui.PORT), rh_webui.Handler)
+            server.serve_forever()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[android] 后端启动失败: {e!r}")
 
     t = threading.Thread(target=_serve, daemon=True)
     t.start()

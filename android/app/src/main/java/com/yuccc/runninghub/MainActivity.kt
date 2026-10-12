@@ -47,12 +47,17 @@ class MainActivity : AppCompatActivity() {
 
         setupWebView()
 
+        // 清 WebView 缓存，避免覆盖安装后残留旧页面（localhost 版）
+        WebView(this).clearCache(true)
+        webView.clearHistory()
+
         // ---- 启动内嵌 Python 后端 ----
         startPythonServer()
         waitForServer { ok ->
             handler.post {
                 progress.visibility = if (ok) View.GONE else View.VISIBLE
-                if (ok) webView.loadUrl("http://127.0.0.1:8765/")
+                // 无论后端是否就绪都加载页面，避免缓存旧页面；后端起来后页面会自动连上
+                webView.loadUrl("http://127.0.0.1:8765/")
             }
         }
     }
@@ -64,7 +69,7 @@ class MainActivity : AppCompatActivity() {
         ws.domStorageEnabled = true
         ws.allowFileAccess = true
         ws.mediaPlaybackRequiresUserGesture = false
-        ws.cacheMode = WebSettings.LOAD_DEFAULT
+        ws.cacheMode = WebSettings.LOAD_NO_CACHE
         webView.webViewClient = WebViewClient()
     }
 

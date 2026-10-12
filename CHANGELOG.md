@@ -1,3 +1,10 @@
+## [0.4.2] - 2026-10-13
+
+### 修复
+
+- **WebView 缓存旧页面**：覆盖安装后 WebView 缓存残留 localhost 版页面，导致"后端未连接"。改为 `LOAD_NO_CACHE` + 启动时清缓存 + 无论后端是否就绪都强制加载页面。
+- **serve.py 启动异常日志**：后端启动失败时打印 traceback，便于排查。
+
 # Changelog
 
 所有重要改动都记录在这个文件里。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
