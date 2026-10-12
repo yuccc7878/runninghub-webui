@@ -55,8 +55,8 @@ class MainActivity : AppCompatActivity() {
         startPythonServer()
         waitForServer { ok ->
             handler.post {
+                // 后端就绪后再加载页面，确保前端 init() 的 API 请求成功
                 progress.visibility = if (ok) View.GONE else View.VISIBLE
-                // 无论后端是否就绪都加载页面，避免缓存旧页面；后端起来后页面会自动连上
                 webView.loadUrl("http://127.0.0.1:8765/")
             }
         }
@@ -108,7 +108,7 @@ class MainActivity : AppCompatActivity() {
     private fun waitForServer(onResult: (Boolean) -> Unit) {
         Thread {
             var ok = false
-            for (i in 0 until 60) {  // 最长等 30s
+            for (i in 0 until 180) {  // 最长等 90s（Chaquopy 首次初始化可能很慢）
                 try {
                     val conn = URL("http://127.0.0.1:8765/").openConnection()
                             as HttpURLConnection
