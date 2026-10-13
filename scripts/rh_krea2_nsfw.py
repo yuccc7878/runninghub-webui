@@ -200,14 +200,14 @@ def build_prompt(
     if prompt_weight and prompt_weight > 0:
         # Krea2PromptWeight：支持 (词:1.5)/(词:-1)，输出 patched model + conditioning
         p["201"] = {"class_type": "Krea2PromptWeight", "inputs": {
-            "clip": ["56", 0], "model": ["200", 0],
+            "clip": ["56", 0], "model": [cur_model, 0],
             "text": prompt_text, "strength": prompt_weight}}
         model_out = ["201", 0]
         cond_out = ["201", 1]
     else:
         p["51"] = {"class_type": "CLIPTextEncode", "inputs": {
             "text": prompt_text, "clip": ["56", 0]}}
-        model_out = ["200", 0]
+        model_out = [cur_model, 0]
         cond_out = ["51", 0]
 
     # --- Rebalance ---
