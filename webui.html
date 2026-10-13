@@ -120,6 +120,16 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 .settab{flex:1;background:#0d0f13;border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:6px 0;font-size:12px;cursor:pointer;transition:.15s}
 .settab.active{background:var(--acc);border-color:var(--acc);color:#1a1a1a;font-weight:700}
 #llmBaseUrl,#llmModel,#llmApiKey,#llmStyle{margin-top:8px}
+/* ---- LoRA 开关行：勾选在标题前 ---- */
+.lora-line{display:flex;align-items:center;gap:8px;margin:2px 0 8px;flex-wrap:wrap}
+.lora-line .chk-box{position:relative;width:20px;height:20px;flex:0 0 20px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.lora-line .chk-box input{position:absolute;opacity:0;width:100%;height:100%;cursor:pointer;margin:0;z-index:1}
+.lora-line .chk-box .box{width:18px;height:18px;border:2px solid var(--line);border-radius:5px;background:#0d0f13;transition:.15s;display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:#fff}
+.lora-line .chk-box input:checked + .box{background:var(--acc);border-color:var(--acc)}
+.lora-line .chk-box input:checked + .box::after{content:"✓";color:#1a1a1a;font-weight:700;line-height:1}
+.lora-line .lora-title{font-weight:500;font-size:13px;cursor:pointer;user-select:none}
+.lora-line .lora-strength{width:58px;margin-left:auto;text-align:center;border:1px solid var(--line);background:#0d0f13;color:var(--tx);border-radius:6px;padding:2px 4px;font-size:13px;height:auto}
+.lora-line .lora-desc{width:100%;padding-left:28px;color:var(--dim);font-size:11px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -406,7 +416,12 @@ function selectScript(k){
       ctl=`<div class="refpick-wrap" data-sync="${p.k==='ref_image'?'main':''}"><input type="hidden" class="refval" id="${id}" value="${p.def||''}"><div class="refpick"></div></div>`;
     }else if(p.type==='lora'){
       const st=(p.def_strength!==undefined?p.def_strength:0.5);
-      return `<label class="lora-line"><input type="checkbox" id="${id}" ${p.def?'checked':''}> ${p.label}${p.help?` <span style="color:#556;font-size:11px">— ${p.help}</span>`:''}<input id="${id}_strength" type="number" step="0.01" min="0" max="2" value="${st}" style="width:64px;margin-left:8px" title="LoRA 强度"></label>`;
+      return `<div class="lora-line">
+        <label class="chk-box"><input type="checkbox" id="${id}" ${p.def?'checked':''}><span class="box"></span></label>
+        <label class="lora-title" for="${id}">${p.label}</label>
+        <input id="${id}_strength" class="lora-strength" type="number" step="0.01" min="0" max="2" value="${st}" title="LoRA 强度">
+        ${p.help?`<div class="lora-desc">${p.help}</div>`:''}
+      </div>`;
     }else if(p.type==='checkbox'){
       ctl=`<label class="chk"><input type="checkbox" id="${id}" ${p.def?'checked':''}><span>${p.def?'开':'关'}</span></label>`;
     }else{
