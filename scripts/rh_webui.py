@@ -9,10 +9,17 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = BASE / "scripts"
+# Chaquopy(Android) 下 __file__ 位于 AssetFinder/app/rh_webui.py，BASE=AssetFinder/ 并无
+# scripts/ 子目录，脚本模块其实与 rh_webui.py 同目录。若仍把不存在的路径插入 sys.path，
+# Chaquopy 的 importer 会在 import urllib.request(→http.client→socket→_socket C 扩展) 时
+# 抛 FileNotFoundError，导致所有访问 RunningHub 外网的请求（点数/市场/跑图/润色）全部失败。
+if not SCRIPTS_DIR.is_dir():
+    SCRIPTS_DIR = Path(__file__).resolve().parent
 REFS_DIR = BASE / "refs"
 OUT_DIR = BASE / "workflows" / "webui_out"
 HTML_FILE = BASE / "webui.html"
-sys.path.insert(0, str(SCRIPTS_DIR))
+if SCRIPTS_DIR.is_dir():
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 PORT = 8765
 _lock = threading.Lock()

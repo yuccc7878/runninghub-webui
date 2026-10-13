@@ -12,6 +12,15 @@ def start(root: str):
     """由 Kotlin 调用，root = app 私有可写目录（filesDir）。"""
     root = Path(root)
 
+    # ---- 清理 sys.path 中的幽灵路径 ----
+    # rh_webui 在模块级可能插入 AssetFinder/scripts（Chaquopy 下该目录不存在）。
+    # 只要 sys.path 里存在不存在的目录，Chaquopy importer 在 import urllib.request
+    # （→http.client→socket→_socket C 扩展）时就会抛 FileNotFoundError，
+    # 导致点数/市场/跑图/润色等所有外网请求失败。这里做一次兜底清除。
+    _bad = str(Path(rh_webui.__file__).resolve().parent.parent / "scripts")
+    while _bad in sys.path:
+        sys.path.remove(_bad)
+
     # ---- 覆盖运行时路径到可写目录 ----
     rh_webui.BASE = root
     rh_webui.REFS_DIR = root / "refs"
@@ -23,8 +32,9 @@ def start(root: str):
     (root / "refs").mkdir(parents=True, exist_ok=True)
     (root / "workflows" / "webui_out").mkdir(parents=True, exist_ok=True)
 
-    # scripts 目录指向 chaquopy 包内路径（模块可从 sys.path 找到）
-    # rh_webui.SCRIPTS_DIR 保留原始值即可，_run_task 通过 importlib 加载模块
+    # scripts 目录：Chaquopy 下脚本模块与 rh_webui.py 同目录（AssetFinder/app），
+    # 已由 Chaquopy 自动加入 sys.path，无需再手动插入
+    rh_webui.SCRIPTS_DIR = Path(rh_webui.__file__).resolve().parent
 
     def _serve():
         from http.server import ThreadingHTTPServer
