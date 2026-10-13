@@ -1146,7 +1146,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         path = u.path
-        if path == "/":
+        if path == "/" or path == "/index.html":
             html = HTML_FILE.read_text(encoding="utf-8") if HTML_FILE.exists() else "<h1>webui.html 缺失</h1>"
             # 单源注入：HTML 里 __API_PORT__ 占位符替换为实际监听端口（本地 8770 / app 8765）
             try:
