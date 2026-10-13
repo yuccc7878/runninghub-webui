@@ -38,6 +38,10 @@ def start(root: str):
 
     # BASE 已指向 filesDir，此时恢复历史任务（模块级不会调用，否则读到 AssetFinder/workflows）
     rh_webui._load_state()
+    # 自动复核上次进程遗留的『假活』任务（重启后轮询线程消失，任务状态卡住的场景）
+    rh_webui._recover_stale_tasks()
+    # 记录实际监听端口（app 固定 8765，供 /api/backend 返回真实值）
+    rh_webui.RUNNING_PORT = rh_webui.PORT
 
     def _serve():
         from http.server import ThreadingHTTPServer

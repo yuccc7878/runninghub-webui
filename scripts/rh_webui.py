@@ -7,7 +7,11 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent.parent
+# BASE 三路自适应（单源维护）：
+#   1) RH_BASE 环境变量优先（本地测试/迁移期可指定数据目录）
+#   2) 默认按 __file__ 推导（仓库根 = scripts/ 的上一级，本地 python3 直接跑）
+#   3) 安卓端由 serve.py 在运行时覆写为 filesDir
+BASE = Path(os.environ.get("RH_BASE") or Path(__file__).resolve().parent.parent)
 SCRIPTS_DIR = BASE / "scripts"
 # Chaquopy(Android) 下 __file__ 位于 AssetFinder/app/rh_webui.py，BASE=AssetFinder/ 并无
 # scripts/ 子目录，脚本模块其实与 rh_webui.py 同目录。若仍把不存在的路径插入 sys.path，
@@ -310,7 +314,7 @@ def _backend_status():
         py_ver = sys.version.split()[0]
         started = datetime.datetime.fromtimestamp(START_TIME).strftime("%Y-%m-%d %H:%M:%S")
         return {
-            "ok": True, "pid": os.getpid(), "port": PORT,
+            "ok": True, "pid": os.getpid(), "port": RUNNING_PORT,
             "python": py_ver, "started": started,
             "base": str(BASE), "tasks": len(TASKS),
             "mode": "android" if os.environ.get("ANDROID_ROOT") else "local",
@@ -328,6 +332,8 @@ def _restart_backend():
 
 START_TIME = time.time()
 _RESTART_FLAG = [False]
+# 实际监听端口（本地 --port / app 8765），_backend_status 用它返回真实值
+RUNNING_PORT = PORT
 
 
 def _polish_prompt(prompt_text, kind, llm):
@@ -416,6 +422,61 @@ def _load_state():
                     TASK_SEQ[0] = n
     except Exception:
         pass
+
+
+def _recover_stale_tasks():
+    """启动后自动复核上次进程遗留的『假活』任务（queued/submitting/running/poll_timeout）。
+
+    进程被杀/重启 → 轮询线程消失 → 任务状态永远卡住 → 前端显示提交中、提交锁被占死。
+    对每个遗留活跃任务 spawn 后台线程查远端：已完成→拉回落盘；还在跑→续轮询；
+    远端不存在→标记失败；查询失败→保持原状态（网络问题留给用户手动错误查询）。
+    绝不自动重提（避免重复烧币）。"""
+    with _lock:
+        stale = [(tid, t.get("pid"), t.get("script") or "") for tid, t in TASKS.items()
+                 if t.get("status") in ("queued", "submitting", "running", "poll_timeout")]
+    if not stale:
+        return
+    print(f"[recover] 发现 {len(stale)} 个遗留活跃任务，后台复核中")
+
+    def _one(tid, pid, script_key):
+        try:
+            if script_key not in REGISTRY:
+                return
+            mod = _load_module(REGISTRY[script_key]["module"])
+            if not pid:
+                # 无 pid：无法续，但绝不重提，标记为中断
+                with _lock:
+                    TASKS[tid]["status"] = "error"
+                    TASKS[tid]["error"] = "进程重启导致任务中断（无任务号，无法恢复）"
+                _save_state()
+                return
+            st = _check_pid_status(pid)
+            if st["status"] == "success":
+                try:
+                    saved = _download_from_entry(tid, mod, st["detail"], pid)
+                    print(f"[recover] {tid} 远端已完成，拉回 {len(saved)} 个产物")
+                except Exception as e:
+                    with _lock:
+                        TASKS[tid]["status"] = "error"
+                        TASKS[tid]["error"] = f"拉回失败: {e}"
+                    _save_state()
+                return
+            if st["status"] in ("pending", "running", "queued"):
+                _resume_poll(tid, mod, pid)
+                return
+            if st["status"] == "not_found":
+                with _lock:
+                    TASKS[tid]["status"] = "error"
+                    TASKS[tid]["error"] = "远端任务不存在（可能已过期），已标记失败"
+                _save_state()
+                return
+            # api_error：网络问题，保持原状态，留给用户手动错误查询
+            print(f"[recover] {tid} 远端查询失败，保持原状态")
+        except Exception as e:
+            print(f"[recover] {tid} 复核异常: {e}")
+
+    for tid, pid, script_key in stale:
+        threading.Thread(target=_one, args=(tid, pid, script_key), daemon=True).start()
 
 
 REGISTRY = {
@@ -811,21 +872,26 @@ def _run_task(task_id, script_key, params):
 # ============================================================
 def _check_pid_status(pid):
     """一次性查远端任务状态，不阻塞。返回 {status, detail}。
-    status ∈ success / error / pending / not_found / api_error"""
+    status ∈ success / error / running / queued / not_found / api_error
+    查 /history/<pid>（成功/失败/进行中+outputs），查不到再查 /queue（排队 vs 生成中）。"""
     import urllib.request
     import urllib.error
     key = _get_api_key()
     if not key:
         return {"status": "api_error", "detail": "未配置 API Key"}
+
+    # ---- 1. /history/<pid>：成功 / 执行失败 / 已入 history 的进行中 ----
     try:
-        req = urllib.request.Request(f"https://www.runninghub.ai/proxy/{key}/history/{pid}", timeout=30)
+        req = urllib.request.Request(f"https://www.runninghub.ai/proxy/{key}/history/{pid}")
         d = json.loads(urllib.request.urlopen(req, timeout=30).read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return {"status": "not_found", "detail": "远端无此任务"}
-        return {"status": "api_error", "detail": f"HTTP {e.code}"}
+            d = None
+        else:
+            return {"status": "api_error", "detail": f"HTTP {e.code}"}
     except Exception as e:
         return {"status": "api_error", "detail": str(e)}
+
     if isinstance(d, dict) and pid in d:
         entry = d[pid]
         st = entry.get("status", {})
@@ -834,7 +900,25 @@ def _check_pid_status(pid):
         for m in st.get("messages", []):
             if m[0] == "execution_error":
                 return {"status": "error", "detail": json.dumps(m[1], ensure_ascii=False)}
-        return {"status": "pending", "detail": entry}
+        if st.get("status_str") == "error":
+            return {"status": "error", "detail": "远端执行失败"}
+        # history 里有但非 success/error → 进行中（已开始生成，只是还没落 history 完成态）
+        return {"status": "running", "detail": entry}
+
+    # ---- 2. history 查不到 → /queue 区分「排队中」vs「生成中」 ----
+    try:
+        q = json.loads(urllib.request.urlopen(
+            urllib.request.Request(f"https://www.runninghub.ai/proxy/{key}/queue"),
+            timeout=30).read().decode("utf-8", errors="replace"))
+        running = [str(x[0]) for x in (q.get("queue_running") or [])]
+        pending = [str(x[0]) for x in (q.get("queue_pending") or [])]
+        if pid in running:
+            return {"status": "running", "detail": {"queue": "running"}}
+        if pid in pending:
+            return {"status": "queued", "detail": {"queue": "pending"}}
+    except Exception:
+        pass
+
     return {"status": "not_found", "detail": "远端无此任务"}
 
 
@@ -860,17 +944,22 @@ def _download_from_entry(task_id, mod, entry, pid):
 
 
 def _claim_runaway_pid(task_id, script_key):
-    """无 pid 时从 /queue + /history 认领一条不冲突的远端任务 pid（无法 100% 保证对应，按时间窗启发式）"""
+    """无 pid 时从 /queue + /history 认领一条不冲突的远端任务 pid。
+    返回 {"ok": bool, "pid": str|None}
+      ok=True  → 查询成功，pid=None 表示确实没有可认领任务
+      ok=False → 查询失败（网络等），pid 未知，绝不能据此重提"""
     import urllib.request
     key = _get_api_key()
     if not key:
-        return None
+        return {"ok": False, "pid": None}
     used = {str(t.get("pid")) for t in TASKS.values() if t.get("pid")}
     cands = []
+    probe_ok = False
     try:
         q = json.loads(urllib.request.urlopen(
-            urllib.request.Request(f"https://www.runninghub.ai/proxy/{key}/queue", timeout=30),
-            timeout=30).read().decode("utf-8", errors="replace"))
+            urllib.request.Request(f"https://www.runninghub.ai/proxy/{key}/queue"),
+            timeout=15).read().decode("utf-8", errors="replace"))
+        probe_ok = True
         for x in (q.get("queue_running") or []):
             cands.append(str(x[0]))
         for x in (q.get("queue_pending") or []):
@@ -879,16 +968,19 @@ def _claim_runaway_pid(task_id, script_key):
         pass
     try:
         h = json.loads(urllib.request.urlopen(
-            urllib.request.Request(f"https://www.runninghub.ai/proxy/{key}/history", timeout=30),
-            timeout=30).read().decode("utf-8", errors="replace"))
+            urllib.request.Request(f"https://www.runninghub.ai/proxy/{key}/history"),
+            timeout=15).read().decode("utf-8", errors="replace"))
+        probe_ok = True
         if isinstance(h, dict):
             cands += [str(p) for p in h.keys()]
     except Exception:
         pass
+    if not probe_ok:
+        return {"ok": False, "pid": None}
     for pid in cands:
         if pid and pid not in used and pid.lower() != "none":
-            return pid
-    return None
+            return {"ok": True, "pid": pid}
+    return {"ok": True, "pid": None}
 
 
 def _resume_poll(task_id, mod, pid):
@@ -947,16 +1039,24 @@ def _inspect_task(task_id):
             _save_state()
             return {"ok": True, "action": "remote_error", "pid": pid, "detail": st["detail"],
                     "msg": "远端已失败，可再次提交"}
-        if st["status"] == "pending":
+        if st["status"] in ("pending", "running", "queued"):
             threading.Thread(target=_resume_poll, args=(task_id, mod, pid), daemon=True).start()
+            _what = {"pending": "生成中", "running": "生成中", "queued": "排队中"}.get(st["status"], "进行中")
             return {"ok": True, "action": "resumed", "pid": pid,
-                    "msg": "远端仍在排队/生成中，已恢复轮询，出图自动落盘"}
-        # not_found / api_error → 尝试认领或重提
+                    "msg": f"远端{_what}，已恢复轮询，出图自动落盘"}
+        if st["status"] == "api_error":
+            # 查询失败（网络/超时），任务状态未知 → 绝不重提，提示稍后重试
+            return {"ok": False, "error": f"查询远端失败（{st['detail']}），请稍后重试", "retryable": True}
+        # st["status"] == "not_found" → 远端确实没有此 pid，尝试认领
         pid = None
 
     # ---- 2. 无 pid：自动认领 ----
     if not pid:
-        claimed = _claim_runaway_pid(task_id, script_key)
+        claim = _claim_runaway_pid(task_id, script_key)
+        if not claim["ok"]:
+            # 认领查询也失败 → 状态未知，绝不重提
+            return {"ok": False, "error": "查询远端队列失败，请稍后重试", "retryable": True}
+        claimed = claim["pid"]
         if claimed:
             with _lock:
                 TASKS[task_id]["pid"] = claimed
@@ -969,14 +1069,26 @@ def _inspect_task(task_id):
                             "msg": f"自动认领远端任务并拉回 {len(saved)} 个产物"}
                 except Exception as e:
                     return {"ok": False, "error": f"落盘失败: {e}"}
+            if st["status"] == "api_error":
+                return {"ok": False, "error": f"查询认领任务失败（{st['detail']}），请稍后重试", "retryable": True}
             threading.Thread(target=_resume_poll, args=(task_id, mod, claimed), daemon=True).start()
             return {"ok": True, "action": "claimed_resumed", "pid": claimed,
                     "msg": "已自动认领远端任务并恢复轮询，出图自动落盘"}
 
-    # ---- 3. 认领不到：自动重提（复用 _run_task 全流程，新 pid 写回当前任务）----
+    # ---- 3. 认领不到：自动重提（仅当确认远端任务不在 → 原任务已丢失才重提）----
     threading.Thread(target=_run_task, args=(task_id, script_key, params), daemon=True).start()
     return {"ok": True, "action": "resubmitted",
             "msg": "远端无匹配任务，已自动重新提交（新任务号会自动接管）"}
+
+
+def _has_active_task():
+    """是否有正在运行的任务（queued/submitting/running/poll_timeout）。
+    普通账户一次只能跑一个任务，提交入口据此拒绝并发。"""
+    with _lock:
+        for t in TASKS.values():
+            if t.get("status") in ("queued", "submitting", "running", "poll_timeout"):
+                return True
+    return False
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1036,6 +1148,11 @@ class Handler(BaseHTTPRequestHandler):
         path = u.path
         if path == "/":
             html = HTML_FILE.read_text(encoding="utf-8") if HTML_FILE.exists() else "<h1>webui.html 缺失</h1>"
+            # 单源注入：HTML 里 __API_PORT__ 占位符替换为实际监听端口（本地 8770 / app 8765）
+            try:
+                html = html.replace("__API_PORT__", str(self.server.server_address[1]))
+            except Exception:
+                pass
             self._send(200, html, "text/html; charset=utf-8")
         elif path == "/api/scripts":
             self._send(200, {k: {"name": v["name"], "desc": v["desc"], "mode": v["mode"], "params": v["params"]}
@@ -1112,6 +1229,9 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b"{}"
         if path == "/api/market/submit":
+            if _has_active_task():
+                self._send(400, {"error": "已有任务在运行，请等待完成后再提交"})
+                return
             try:
                 data = json.loads(raw.decode() or "{}")
             except Exception:
@@ -1127,6 +1247,9 @@ class Handler(BaseHTTPRequestHandler):
             r = _market_submit(wid, vals, webhook=wh, instance_type=it)
             self._send(200, r)
         elif path == "/api/submit":
+            if _has_active_task():
+                self._send(400, {"error": "已有任务在运行，请等待完成后再提交"})
+                return
             try:
                 data = json.loads(raw.decode() or "{}")
             except Exception:
@@ -1323,7 +1446,9 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="RunningHub 跑图 WebUI")
     ap.add_argument("--port", type=int, default=PORT)
     a = ap.parse_args()
+    RUNNING_PORT = a.port
     print(f"洛宝跑图台: http://localhost:{a.port}")
     print(f"  refs: {REFS_DIR} | 输出: {OUT_DIR}")
     _load_state()  # BASE 已确定，恢复历史任务
+    _recover_stale_tasks()  # 自动复核上次进程遗留的『假活』任务
     ThreadingHTTPServer(("0.0.0.0", a.port), Handler).serve_forever()
