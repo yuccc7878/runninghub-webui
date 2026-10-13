@@ -77,6 +77,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 #taskMenu .tm-item.tm-exp:hover{background:rgba(60,190,120,.25);color:#8ff0be}
 #taskMenu .tm-item.tm-rerun:hover{background:rgba(224,160,60,.25);color:#ffd28a}
 #taskMenu .tm-item.tm-reuse:hover{background:rgba(120,140,255,.25);color:#b8c6ff}
+#taskMenu .tm-item.tm-frame:hover{background:rgba(200,120,220,.25);color:#e2b6f0}
 #drawerTasks .tk .nothumb{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:8px;text-align:center;color:var(--dim);font-size:10px;gap:4px}
 #drawerTasks .tk .nothumb .prompt{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;word-break:break-all}
 /* ===== 大图预览弹层 ===== */
@@ -237,6 +238,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 <!-- 任务长按菜单 -->
 <div id="taskMenu">
   <div class="tm-item tm-reuse" onclick="var _t=MENU_TASK;hideTaskMenu();reuseTask(_t?._id||_t?.id)">📋 复用提示词</div>
+  <div class="tm-item tm-frame" onclick="var _t=MENU_TASK;hideTaskMenu();extractLastFrame(_t)">🎞 抽取尾帧</div>
   <div class="tm-item tm-insp" onclick="var _t=MENU_TASK;hideTaskMenu();inspectTask(_t)">🔍 错误查询</div>
   <div class="tm-item tm-exp" onclick="var _t=MENU_TASK;hideTaskMenu();exportTask(_t)">💾 保存到相册</div>
   <div class="tm-item tm-rerun" onclick="var _t=MENU_TASK;hideTaskMenu();rerunTask(_t?._id||_t?.id)">↻ 原样重跑</div>
@@ -824,6 +826,32 @@ async function reuseTask(id){
   const form=document.querySelector('#params');
   if(form)form.scrollIntoView({behavior:'smooth',block:'center'});
   toast('✅ 已复用提示词，可修改后手动提交');
+}
+
+// 抽取尾帧：视频任务 → 抽最后一帧存入 refs 并自动设为当前参考图
+async function extractLastFrame(t){
+  if(!t){return}
+  const id=t._id||t.id;
+  // 本地先判断是否视频产物，非视频直接提示（省一次往返）
+  const cand=[t.image,...(t.files||[])].filter(Boolean);
+  const isVid=cand.some(f=>/\.(mp4|webm|mov|mkv|avi)$/i.test(f));
+  if(!isVid){toast('该任务不是视频产物，无法抽帧');return}
+  toast('🎞 正在抽取尾帧…');
+  try{
+    const r=await api('/api/task/lastframe',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id})});
+    if(!r.ok){toast('抽帧失败: '+(r.error||'未知'));return}
+    CUR_REF=r.name;                 // 先设为当前选中
+    setRefTab('refs');              // 切到素材库，确保能看到新尾帧
+    await refreshRefs();            // 重载列表 + renderRefGrid（显示"已选"）
+    // 同步脚本参数里的 ref 控件（隐藏字段 + 缩略图选中态）
+    document.querySelectorAll('.refval').forEach(inp=>inp.value=r.name);
+    document.querySelectorAll('.refpick-wrap').forEach(el=>renderRefPick(el));
+    toast('✅ 尾帧已加入参考图并选中: '+r.name);
+    const dw=$('drawer');if(dw&&dw.classList.contains('open'))toggleDrawer(false);
+  }catch(e){
+    toast('抽帧失败: 后端未连接');
+  }
 }
 
 // 重跑：用任务原 script+params 再提交一次（先弹窗确认防误触）
