@@ -152,8 +152,16 @@ def build_prompt(
     vae="default",
     prompt_weight=1.0,
     out_format="png",
+    use_style_lora=True,
+    use_realism_lora=True,
+    use_body_lora=True,
 ):
-    """构造完整 API prompt（节点 ID 沿用原工作流，方便对照 UI）"""
+    """构造完整 API prompt（节点 ID 沿用原工作流，方便对照 UI）
+
+    LoRA 开关（v0.4.8 新增）：
+        use_style_lora / use_realism_lora / use_body_lora 为 False 时跳过对应
+        LoraLoaderModelOnly 节点（不加载、不扣币）。默认 True 保持旧行为。
+    """
     if model not in MODELS:
         raise ValueError(f"未知底模 {model}，可选: {list(MODELS)}")
     if vae not in VAES:
@@ -170,15 +178,23 @@ def build_prompt(
     p["57"] = {"class_type": "VAELoader", "inputs": {
         "vae_name": VAES[vae]}}
 
-    # --- 底模 + 3 层 LoRA 串联 ---
+    # --- 底模 + 3 层 LoRA 串联（可勾选）---
+    # 当前模型引用：默认从底模出发，每启用一个 LoRA 就新建节点并指向它
+    cur_model = "106"
     p["106"] = {"class_type": "UNETLoader", "inputs": {
         "unet_name": MODELS[model], "weight_dtype": "default"}}
-    p["107"] = {"class_type": "LoraLoaderModelOnly", "inputs": {
-        "lora_name": LORA_STYLE, "strength_model": style, "model": ["106", 0]}}
-    p["108"] = {"class_type": "LoraLoaderModelOnly", "inputs": {
-        "lora_name": LORA_REALISM, "strength_model": realism, "model": ["107", 0]}}
-    p["200"] = {"class_type": "LoraLoaderModelOnly", "inputs": {
-        "lora_name": LORA_BODY, "strength_model": body, "model": ["108", 0]}}
+    if use_style_lora:
+        p["107"] = {"class_type": "LoraLoaderModelOnly", "inputs": {
+            "lora_name": LORA_STYLE, "strength_model": style, "model": [cur_model, 0]}}
+        cur_model = "107"
+    if use_realism_lora:
+        p["108"] = {"class_type": "LoraLoaderModelOnly", "inputs": {
+            "lora_name": LORA_REALISM, "strength_model": realism, "model": [cur_model, 0]}}
+        cur_model = "108"
+    if use_body_lora:
+        p["200"] = {"class_type": "LoraLoaderModelOnly", "inputs": {
+            "lora_name": LORA_BODY, "strength_model": body, "model": [cur_model, 0]}}
+        cur_model = "200"
 
     # --- 文本编码 / 权重 ---
     if prompt_weight and prompt_weight > 0:
@@ -343,6 +359,7 @@ def run(
     shift=3.0, rebalance="detail", rebalance_mul=1.0,
     custom_weights=None, renormalize=True,
     vae="default", prompt_weight=1.0, out_format="png",
+    use_style_lora=True, use_realism_lora=True, use_body_lora=True,
     out_dir="outputs", album=None, album_name=None, no_wait=False,
 ):
     if preset:
@@ -353,6 +370,7 @@ def run(
         raise ValueError("需要 --prompt 或 --preset")
 
     print(f"[配置] 底模={model} | 风格={style} 写实={realism} 身材={body} | "
+          f"LoRA开关: 风格={'✓' if use_style_lora else '✗'} 写实={'✓' if use_realism_lora else '✗'} 身材={'✓' if use_body_lora else '✗'} | "
           f"{ratio} {mp}MP | steps={steps} | vae={vae} | prompt_weight={prompt_weight}")
 
     p = build_prompt(
@@ -361,6 +379,8 @@ def run(
         seed=seed, shift=shift, rebalance=rebalance, rebalance_mul=rebalance_mul,
         custom_weights=custom_weights, renormalize=renormalize,
         vae=vae, prompt_weight=prompt_weight, out_format=out_format,
+        use_style_lora=use_style_lora, use_realism_lora=use_realism_lora,
+        use_body_lora=use_body_lora,
     )
     print(f"[节点数] {len(p)}")
 

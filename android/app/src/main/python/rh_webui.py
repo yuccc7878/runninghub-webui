@@ -509,9 +509,12 @@ REGISTRY = {
             {"k": "ratio", "label": "比例", "type": "select", "options": ["9:16", "16:9", "1:1", "2:3", "3:2", "3:4", "4:3", "21:9"], "def": "9:16"},
             {"k": "mp", "label": "分辨率", "type": "select", "options": [{"v": "0.5", "label": "0.5 MP（低清快出）"}, {"v": "1.0", "label": "1 MP（标清）"}, {"v": "2.0", "label": "2 MP ≈1080×1920（推荐）"}, {"v": "4.0", "label": "4 MP（2K级）"}, {"v": "8.0", "label": "8 MP（超高清）"}], "def": "2.0", "help": "2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},
             {"k": "steps", "label": "步数", "type": "int", "def": 12},
-            {"k": "style", "label": "风格LoRA", "type": "float", "def": 0.5},
-            {"k": "realism", "label": "写实LoRA", "type": "float", "def": 0.6},
-            {"k": "body", "label": "身材LoRA", "type": "float", "def": 0.3},
+            {"k": "style", "label": "风格LoRA", "type": "checkbox", "def": True, "help": "勾选=启用风格LoRA"},
+            {"k": "style_strength", "label": "风格LoRA强度", "type": "float", "def": 0.5, "group": "advanced"},
+            {"k": "realism", "label": "写实LoRA", "type": "checkbox", "def": True, "help": "勾选=启用写实LoRA"},
+            {"k": "realism_strength", "label": "写实LoRA强度", "type": "float", "def": 0.6, "group": "advanced"},
+            {"k": "body", "label": "身材LoRA", "type": "checkbox", "def": True, "help": "勾选=启用身材LoRA"},
+            {"k": "body_strength", "label": "身材LoRA强度", "type": "float", "def": 0.3, "group": "advanced"},
             {"k": "prompt_weight", "label": "PromptWeight", "type": "float", "def": 1.0, "help": "0=禁用；>0 启用 (词:1.5) 权重语法"},
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
             {"k": "cfg", "label": "CFG", "type": "float", "def": 1.0, "help": "Krea2 建议 1.0", "group": "advanced"},
@@ -533,9 +536,12 @@ REGISTRY = {
             {"k": "mp", "label": "分辨率", "type": "select", "options": [{"v": "0.5", "label": "0.5 MP（低清快出）"}, {"v": "1.0", "label": "1 MP（标清）"}, {"v": "2.0", "label": "2 MP ≈1080×1920（推荐）"}, {"v": "4.0", "label": "4 MP（2K级）"}, {"v": "8.0", "label": "8 MP（超高清）"}], "def": "2.0", "help": "2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},
             {"k": "steps", "label": "步数", "type": "int", "def": 12},
             {"k": "denoise", "label": "重绘强度", "type": "float", "def": 0.65},
-            {"k": "style", "label": "风格LoRA", "type": "float", "def": 0.5},
-            {"k": "realism", "label": "写实LoRA", "type": "float", "def": 0.6},
-            {"k": "body", "label": "身材LoRA", "type": "float", "def": 0.3},
+            {"k": "style", "label": "风格LoRA", "type": "checkbox", "def": True, "help": "勾选=启用风格LoRA"},
+            {"k": "style_strength", "label": "风格LoRA强度", "type": "float", "def": 0.5, "group": "advanced"},
+            {"k": "realism", "label": "写实LoRA", "type": "checkbox", "def": True, "help": "勾选=启用写实LoRA"},
+            {"k": "realism_strength", "label": "写实LoRA强度", "type": "float", "def": 0.6, "group": "advanced"},
+            {"k": "body", "label": "身材LoRA", "type": "checkbox", "def": True, "help": "勾选=启用身材LoRA"},
+            {"k": "body_strength", "label": "身材LoRA强度", "type": "float", "def": 0.3, "group": "advanced"},
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
             {"k": "cfg", "label": "CFG", "type": "float", "def": 1.0, "help": "Krea2 建议 1.0", "group": "advanced"},
             {"k": "sampler", "label": "采样器", "type": "select", "options": ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "dpmpp_sde", "uni_pc"], "def": "euler", "group": "advanced"},
@@ -785,12 +791,22 @@ def _run_task(task_id, script_key, params):
                 seed = int(seed_s) if seed_s else None
             except ValueError:
                 seed = None
+            # LoRA 开关（checkbox）：true/false / "true"/"false" / "1"/"0" 都兼容
+            def _chk(v, d=True):
+                if v is None:
+                    return d
+                if isinstance(v, bool):
+                    return v
+                return str(v).strip().lower() in ("1", "true", "yes", "on")
+            use_style = _chk(params.get("style"), True)
+            use_realism = _chk(params.get("realism"), True)
+            use_body = _chk(params.get("body"), True)
             p = mod.build_prompt(
                 prompt_text=prompt,
                 model=params.get("model", "gptruth"),
-                style=float(params.get("style", 0.5)),
-                realism=float(params.get("realism", 0.6)),
-                body=float(params.get("body", 0.3)),
+                style=float(params.get("style_strength", 0.5)) if use_style else 0.0,
+                realism=float(params.get("realism_strength", 0.6)) if use_realism else 0.0,
+                body=float(params.get("body_strength", 0.3)) if use_body else 0.0,
                 ratio=params.get("ratio", "9:16"),
                 mp=float(params.get("mp", 2.0)),
                 steps=int(params.get("steps", 12)),
@@ -803,6 +819,9 @@ def _run_task(task_id, script_key, params):
                 vae=params.get("vae", "default"),
                 prompt_weight=float(params.get("prompt_weight", 1.0)),
                 out_format=params.get("out_format", "png"),
+                use_style_lora=use_style,
+                use_realism_lora=use_realism,
+                use_body_lora=use_body,
             )
             if script_key == "krea2_i2i":
                 ref = params.get("ref_image")
