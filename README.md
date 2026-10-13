@@ -65,9 +65,41 @@ python3 scripts/rh_webui.py --port 8765
 | MiniMaxH3 首尾帧视频 | I2V | 首帧(→尾帧)生成视频，支持续接 |
 | MiniMaxH3 全能视频 | T2V / omni | 文生视频 / 参考图驱动 |
 
-## Android 客户端
+## 📱 Android 客户端
 
-仓库内置安卓壳工程（Chaquopy 内嵌 Python 后端 + WebView），GitHub Actions 自动构建签名 APK，发布在 [Releases](https://github.com/yuccc7878/runninghub-webui/releases) 页面，手机直接安装使用。
+本项目自带完整的安卓壳工程（Chaquopy 内嵌 Python 后端 + WebView），GitHub Actions 每次发版自动构建签名 APK。**装进手机就是一台随身跑图台**，本地后端和 API Key 全部在手机里，不依赖电脑。
+
+[![Download APK](https://img.shields.io/badge/下载_APK-v0.4.7-brightgreen)](https://github.com/yuccc7878/runninghub-webui/releases/download/v0.4.7/app-release-v0.4.7.apk)
+
+| 项 | 说明 |
+|---|---|
+| 最新版本 | **v0.4.7**（约 38.7 MB） |
+| 直接下载 | [app-release-v0.4.7.apk](https://github.com/yuccc7878/runninghub-webui/releases/download/v0.4.7/app-release-v0.4.7.apk) |
+| 历史版本 | [Releases 页面](https://github.com/yuccc7878/runninghub-webui/releases) |
+| 系统要求 | Android 7.0+（minSdk 24） |
+| 包名 | `com.yuccc.runninghub` |
+
+### 安装步骤
+
+1. 用手机浏览器打开上面的**直接下载**链接，或去 Releases 页下载 APK
+2. 点击安装（首次需允许「安装未知来源应用」）
+3. 打开 App → 右上角 ⚙ 填入 RunningHub API Key → 开跑
+
+### 与本地 WebUI 的关系
+
+- **同一份代码**：App 内嵌的后端与仓库 `scripts/` 完全一致（CI 打包时同步），修一处 push，本地和手机同时生效
+- **端口分工**：App 内置后端监听 `127.0.0.1:8765`；本地 WebUI 默认 `8765`，可用 `--port` 自定义
+- **数据隔离**：App 的任务与 API Key 存在手机应用私有目录，不上传、不共享，和电脑本地数据互不干扰
+- **二选一即可**：要么电脑浏览器跑，要么手机装 App 跑，不必同时开两个
+
+### 自行构建（可选）
+
+```bash
+cd android
+./gradlew assembleRelease
+```
+
+> 需要 Android SDK + JDK 17。日常使用直接下载 Release 里的 APK 即可，无需自行构建。
 
 ## 安全说明
 
