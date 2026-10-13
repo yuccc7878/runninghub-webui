@@ -99,11 +99,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun copyAssetToFile(assetName: String, target: File) {
         try {
+            // 目标只读/异常时强制可写，避免静默失败导致前端停留在旧版本
+            if (target.exists() && !target.canWrite()) {
+                target.setWritable(true)
+            }
             assets.open(assetName).use { input ->
                 target.outputStream().use { output -> input.copyTo(output) }
             }
+            android.util.Log.i("RunningHub", "asset 更新: $assetName -> ${target.absolutePath}")
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("RunningHub", "asset 复制失败，删除后重试: $assetName", e)
+            // 兜底：删掉旧文件重试一次（旧文件可能是只读/坏属主）
+            try {
+                target.delete()
+                assets.open(assetName).use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+                android.util.Log.i("RunningHub", "asset 重试成功: $assetName")
+            } catch (e2: Exception) {
+                android.util.Log.e("RunningHub", "asset 复制重试仍失败: $assetName", e2)
+            }
         }
     }
 
