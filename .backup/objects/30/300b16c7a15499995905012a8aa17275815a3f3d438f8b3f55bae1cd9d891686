@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""补充搜索: illustrious/动漫风/细节/可爱 + 深挖候选工作流 LoRA"""
+import json
+import urllib.request
+
+KEY = "63e1f602f33442b2b21ca7f6e9ac5041"
+BASE = "https://www.runninghub.ai"
+
+
+def post(path, body):
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(
+        f"{BASE}{path}", data=data, method="POST",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {KEY}"},
+    )
+    try:
+        return json.loads(urllib.request.urlopen(req, timeout=25).read().decode())
+    except Exception as e:
+        return {"_err": str(e)}
+
+
+def get_detail(wid):
+    d = post("/api/webapp/detail", {"webappId": wid})
+    return d.get("data") or {}, d.get("_err")
+
+
+def extract_lora(detail):
+    """抓 lora_name 输入节点的当前值 + 描述里的 lora 字样"""
+    hits = []
+    ins = detail.get("inputNodes") or []
+    for n in ins:
+        fn = str(n.get("fieldName") or "")
+        nn = str(n.get("nodeName") or "")
+        fv = str(n.get("fieldValue") or "")
+        desc = str(n.get("description") or "")[:150]
+        if "lora" in (fn + nn).lower() or ".safetensors" in fv:
+            hits.append((nn, fn, fv, desc))
+        elif ".safetensors" in desc:
+            hits.append((nn, fn, "(desc)", desc))
+    return hits
+
+
+print("=== 补充市场搜索 ===\n")
+for kw in ("illustrious", "动漫风", "漫画", "动漫", "二次元"):
+    d = post("/api/webapp/list", {"size": 10, "current": 1, "search": kw})
+    recs = (d.get("data") or {}).get("records") or [] if not d.get("_err") else []
+    print(f"--- '{kw}' 命中 {len(recs)} ---")
+    for r in recs[:6]:
+        print(f"  - {r.get('id')} {r.get('name')} | 使用 {(r.get('statisticsInfo') or {}).get('useCount')}")
+    print()
+
+print("\n=== 深挖候选工作流 LoRA ===\n")
+# 增强人物细节 + z-anime 系列 + 其他可能带增强 LoRA 的
+TARGETS = [
+    ("2072946404112297986", "增强人物细节"),
+    ("2049428490881081346", "z_anime+illustrious 质感文生图+细节增强"),
+    ("2074050647022125056", "Z-Anime动漫生图专属"),
+    ("2049498784266194945", "Z-Anime-自动提示词"),
+    ("2075238623930310658", "二次元-文生图"),
+    ("2064736900497362945", "Z-Anime-基于ZIB底模"),
+]
+for wid, name in TARGETS:
+    detail, err = get_detail(wid)
+    if err:
+        print(f"[{name}] ❌ {err}")
+        continue
+    hits = extract_lora(detail)
+    print(f"[{name}] ({wid}) LoRA 相关节点 {len(hits)} 个:")
+    for nn, fn, fv, desc in hits:
+        print(f"    - {nn}/{fn} = {fv}")
+        if desc and desc != fv:
+            print(f"      desc: {desc}")
+    if not hits:
+        print("    （无 LoRA 输入节点暴露）")
+    print()

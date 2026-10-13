@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""精准扫描二次元相关 webapp，抓 lora_name 输入节点的完整可选列表"""
+import json
+import urllib.request
+
+KEY = "63e1f602f33442b2b21ca7f6e9ac5041"
+BASE = "https://www.runninghub.ai"
+
+# 二次元/动漫候选（更大池子，覆盖不同工作流）
+CANDIDATES = [
+    ("2075238623930310658", "二次元-文生图"),
+    ("2064736900497362945", "Z-Anime-基于ZIB底模"),
+    ("2060997037902094337", "Z-Anime动漫图片生成"),
+    ("2058139430866735105", "z-anime-distill-8step"),
+    ("2074050647022125056", "Z-Anime动漫生图专属"),
+    ("2049498784266194945", "Z-Anime-自动提示词"),
+    ("2049428490881081346", "z_anime+illustrious 细节增强"),
+    ("2049120457999257602", "Z-Anime-漫画专用"),
+    ("2049114813778890753", "Z-Anime-动漫文生图"),
+    ("2049079404013297665", "Z-Anime-高清放大"),
+    ("2053379832075042817", "PiPi-Z-image Controlnet 转动漫"),
+    ("2052597891260268546", "超顺滑动漫动态壁纸"),
+    ("2075177009222864898", "二次元动漫转真人"),
+    ("1911791420821438465", "动漫转绘真人风格V3"),
+    ("2073840811095191553", "二次元02-无TAG"),
+    ("2075226721938399234", "二次元03-自动反推"),
+    ("2020110310895521794", "二次元/动漫转真人Qwen"),
+    ("2071591255993315330", "anime_style_transfer"),
+    ("2019041784503996418", "anime2real-2511"),
+    ("1988106249537495042", "Anime2RealV1.0"),
+    ("1924646326909194241", "anime street-真人转动漫"),
+    ("2064736900497362945", "Z-Anime-基于ZIB底模2"),
+]
+
+
+def get_detail(webapp_id):
+    body = json.dumps({"webappId": webapp_id}).encode()
+    req = urllib.request.Request(
+        f"{BASE}/api/webapp/detail",
+        data=body, method="POST",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {KEY}"},
+    )
+    try:
+        d = json.loads(urllib.request.urlopen(req, timeout=25).read().decode())
+        return d.get("data") or {}, None
+    except Exception as e:
+        return None, f"请求失败: {e}"
+
+
+def extract_lora_nodes(detail):
+    """抓 fieldName 含 lora 的输入节点，列出可选集合"""
+    out = []
+    ins = detail.get("inputNodes") or []
+    for n in ins:
+        fn = str(n.get("fieldName") or "")
+        nn = str(n.get("nodeName") or "")
+        if "lora" not in (fn + nn).lower():
+            continue
+        fd = n.get("fieldData") or ""
+        fv = str(n.get("fieldValue") or "")
+        # fieldData 可能是 "[['a','b'], {'default':'a'}]" 或纯字符串
+        opts = []
+        raw = fd if isinstance(fd, str) else json.dumps(fd, ensure_ascii=False)
+        try:
+            arr = json.loads(raw)
+            if isinstance(arr, list) and arr and isinstance(arr[0], list):
+                opts = [str(x) for x in arr[0]]
+        except Exception:
+            opts = [w.strip() for w in raw.split(",") if w.strip()]
+        out.append({
+            "node": nn, "field": fn, "type": n.get("fieldType"),
+            "current": fv, "options": opts,
+        })
+    return out
+
+
+print("=== 二次元 webapp 的 lora 输入节点扫描 ===\n")
+all_lora_files = {}
+for wid, name in CANDIDATES:
+    detail, err = get_detail(wid)
+    if err:
+        print(f"[{name}] ({wid}) ❌ {err}")
+        continue
+    lora_nodes = extract_lora_nodes(detail)
+    if not lora_nodes:
+        continue
+    print(f"[{name}] ({wid})")
+    for ln in lora_nodes:
+        print(f"    - {ln['node']}/{ln['field']} ({ln['type']}) 当前={ln['current']}")
+        ops = ln["options"]
+        shown = [o for o in ops if ".safetensors" in o or "lora" in o.lower()]
+        for o in shown[:30]:
+            print(f"        🎯 {o}")
+            all_lora_files.setdefault(o, []).append(name)
+        if len(shown) > 30:
+            print(f"        ... 共 {len(ops)} 个选项")
+    print()
+
+print("\n=== 汇总: 平台二次元相关 LoRA ===")
+if not all_lora_files:
+    print("（未从输入节点暴露的 lora_name 中找到文件）")
+for f, ins in sorted(all_lora_files.items(), key=lambda x: -len(x[1])):
+    print(f"• {f}   (来自: {', '.join(dict.fromkeys(ins))})")

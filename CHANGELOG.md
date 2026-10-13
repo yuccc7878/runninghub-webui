@@ -1,3 +1,12 @@
+## [0.4.8] - 2026-10-14
+### 新增
+- **Illustrious 二次元文生图脚本（T2I）**：WAI-illustrious-SDXL 底模 + 可勾选 LoRA（Smooth_Booster 画质增强 / Cunnystyle 插画微调），半写实 CG 动漫风。封装平台工作流 2050930923734093825
+- **zanime 真人转二次元 LoRA**：zimage 脚本新增 `zanime` 选项（Z-Anime04，选图生图 + 勾选即真人转二次元），实测 3 档 denoise 均可出图
+
+### 改进
+- **LoRA 勾选框样式重做**：自定义金色勾选块放在标题前，说明独立换行，强度靠右，替换原生 checkbox
+- **Illustrious LoRA 命名与默认修正**：Cunnystyle 明确为「插画微调」（底模已是二次元，非转换用途），默认不勾选
+
 ## [0.4.7] - 2026-10-13
 
 ### 重构

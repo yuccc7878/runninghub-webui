@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""同步 webui.html EMBEDDED_SCRIPTS：zanime 选项 + illustrious_t2i 脚本（一次性）"""
+import sys, json, re
+
+path = "/data/data/com.ai.assistance.operit/files/workspace/runninghub/webui.html"
+s = open(path, encoding="utf-8").read()
+
+# 1) zimage lora 下拉加 zanime
+old_z = '{"v": "peach", "label": "peach · 蜜桃臀加强（⚠会改脸型，仅限不露脸构图）"}]'
+new_z = ('{"v": "peach", "label": "peach · 蜜桃臀加强（⚠会改脸型，仅限不露脸构图）"},'
+         '{"v": "zanime", "label": "zanime · 二次元动漫化（真人转二次元，选图生图用）"}]')
+n1 = s.count(old_z)
+print(f"zanime 选项: 匹配 {n1} 处")
+s = s.replace(old_z, new_z)
+
+# 2) 在 h3_omni_video 结束后（最后一个脚本）追加 illustrious_t2i
+# 找到 EMBEDDED_SCRIPTS 的结尾 "..."}]};\n
+ILL_DEF = ('''
+"illustrious_t2i": {"name": "Illustrious 二次元文生图 (T2I)", "desc": "WAI-illustrious-SDXL 底模 + 可勾选二次元增强 LoRA（Smooth_Booster / Cunnystyle）。半写实 CG 动漫风", "module": "rh_illustrious_api", "mode": "t2i", "params": [{"k": "resolution", "label": "分辨率", "type": "select", "options": [{"v": "936x1368", "label": "936×1368（竖屏 9:16 · 推荐）"}, {"v": "768x1344", "label": "768×1344（竖屏 9:16 · 低清）"}, {"v": "1080x1920", "label": "1080×1920（竖屏 9:16 · 高清，更贵）"}, {"v": "1216x832", "label": "1216×832（横屏 16:9）"}, {"v": "1024x1024", "label": "1024×1024（方形 1:1）"}], "def": "936x1368"}, {"k": "steps", "label": "步数", "type": "int", "def": 20}, {"k": "cfg", "label": "CFG", "type": "float", "def": 2.0, "help": "Illustrious 系建议 2.0 左右"}, {"k": "smooth", "label": "画质增强 Smooth_Booster", "type": "lora", "def": true, "def_strength": 0.9, "help": "画质平滑/细节增强（Illustrious 系）"}, {"k": "cunnystyle", "label": "二次元风格 Cunnystyle", "type": "lora", "def": true, "def_strength": 0.8, "help": "二次元动漫风格（Illustrious 系）"}, {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"}]}
+'''
+)
+
+# 定位 EMBEDDED_SCRIPTS 对象结尾：最后一个脚本 h3_omni_video 的 "}]};\n
+# 直接找字符串最后出现 "}]};\n 且前面是 h3_omni_video 的种子参数
+anchor = '"placeholder": "留空 = 随机", "group": "advanced"}]}, "h3_omni_video"'
+# 找 h3_omni_video 结尾
+m = re.search(r'"h3_omni_video": \{.*?"params": \[.*?\]\}', s, re.S)
+if not m:
+    print("❌ 找不到 h3_omni_video")
+    sys.exit(1)
+
+# 在 h3_omni_video 对象结束后（"}]}" 处），若后面紧跟 "};" 则在之前插入
+end_pos = m.end()
+# 检查 h3_omni_video 的 params 段结束后的 "}" 是否就是对象结束
+# EMBEDDED_SCRIPTS 是 {...}, {...}, "h3_omni_video": {...}};
+# h3_omni_video 是最后一个，所以它结束后是 "};"
+after = s[end_pos:end_pos+10]
+print(f"h3_omni_video 后内容: {after[:10]!r}")
+if after.startswith("}"):
+    # 该 "}" 是对象闭合，在它之前插入 , newdef
+    insert_at = end_pos + 1
+    # 如果后面还有 "}"（对象结束），则先加逗号再插
+    s = s[:end_pos] + "," + ILL_DEF.rstrip() + s[end_pos+1:]
+    print("已在 h3_omni_video 后插入 illustrious_t2i")
+else:
+    print("❌ 未找到插入点")
+    sys.exit(1)
+
+open(path, "w", encoding="utf-8").write(s)
+print("写入完成")
+
+# 验证 JSON
+try:
+    m2 = re.search(r'const EMBEDDED_SCRIPTS=(.*?);\n', open(path, encoding="utf-8").read(), re.S)
+    d = json.loads(m2.group(1))
+    print(f"✅ JSON OK, 脚本数: {len(d)}")
+    print("  包含 illustrious_t2i:", "illustrious_t2i" in d)
+    print("  zimage 含 zanime:", any(o.get("v")=="zanime" for o in d["zimage_i2i"]["params"] if o["k"]=="lora" for o in []))
+    zl = [p for p in d["zimage_i2i"]["params"] if p["k"]=="lora"][0]
+    print("  zimage lora 选项:", [o["v"] for o in zl["options"]])
+except Exception as e:
+    print(f"❌ JSON 验证失败: {e}")

@@ -1,0 +1,84 @@
+# RunningHub WebUI - 本地统一跑图台
+
+RunningHub WebUI 是一个基于 RunningHub 的本地统一跑图台，支持文生图、图生图、视频生成、AI 润色和任务异步管理。你可以通过 WebUI 快速调用 RunningHub API，在本地完成 AI 绘画与视频生成任务。
+
+[![GitHub stars](https://img.shields.io/github/stars/yuccc7878/runninghub-webui?style=social)](https://github.com/yuccc7878/runninghub-webui)
+[![GitHub release](https://img.shields.io/github/v/release/yuccc7878/runninghub-webui)](https://github.com/yuccc7878/runninghub-webui/releases)
+
+## 功能特性
+
+- **文生图**：输入提示词，一键生成图片（Zimage / Krea2 双引擎）
+- **图生图**：上传参考图，生成相似风格作品，保持角色改姿势/背景
+- **视频生成**：支持 RunningHub 视频生成任务（MiniMaxH3 首尾帧 / 全能视频）
+- **AI 润色**：自动优化提示词，按 t2i / i2i / video 三套分镜规范扩写，提升出图质量
+- **异步任务管理**：任务队列、状态查询、断点续跑、结果下载，历史任务可重跑/删除
+- **本地部署**：支持本地运行，API Key 本地保存，代码零硬编码，数据更安全
+- **零第三方依赖**：纯 Python 标准库服务端 + 原生 HTML/JS 前端
+
+## 快速开始
+
+### 安装
+
+```bash
+git clone https://github.com/yuccc7878/runninghub-webui.git
+cd runninghub-webui
+```
+
+> 零依赖：无需 `pip install`，Python 3.8+ 标准库即可运行。
+
+### 配置 RunningHub API
+
+启动后在 WebUI 右上角点「⚙ 密钥」，填入 RunningHub API Key（在 [runninghub.ai](https://www.runninghub.ai) 账号页获取）即可，所有生成脚本自动生效。可选配置 OpenAI 兼容的 LLM 接口用于 AI 润色。
+
+### 启动 WebUI
+
+```bash
+python3 scripts/rh_webui.py --port 8765
+```
+
+打开浏览器访问 http://127.0.0.1:8765 即可使用。
+
+> 默认端口 8765，可自定义：`--port 8770`。工作区/移动端（安卓 App）共用同一份代码。
+
+## 目录结构
+
+```
+├── scripts/               # 服务端与各生成脚本模块
+│   ├── rh_webui.py        # WebUI 服务端（入口）
+│   ├── rh_zimage_api.py   # Zimage 工作流
+│   ├── rh_krea2_nsfw.py   # Krea2 文生图/图生图
+│   ├── rh_h3_flf_api.py   # MiniMaxH3 首尾帧视频
+│   └── rh_workflow_api.py # MiniMaxH3 全能视频
+├── webui.html            # 前端页面（单文件）
+├── android/              # 安卓壳（Chaquopy + WebView，CI 自动构建 APK）
+├── refs/                  # 参考图素材库（运行时生成）
+└── workflows/             # 运行时状态、配置与产物（不入库）
+```
+
+## 生成脚本一览
+
+| 脚本 | 模式 | 说明 |
+|---|---|---|
+| Zimage 图生图/文生图 | I2I + T2I | 选参考图=图生图，纯提示词=文生图 |
+| Krea2 文生图 | T2I | Krea2 底模，支持权重语法 `(词:1.5)` |
+| Krea2 图生图 | I2I | 参考图注入保持角色，改姿势/背景 |
+| MiniMaxH3 首尾帧视频 | I2V | 首帧(→尾帧)生成视频，支持续接 |
+| MiniMaxH3 全能视频 | T2V / omni | 文生视频 / 参考图驱动 |
+
+## Android 客户端
+
+仓库内置安卓壳工程（Chaquopy 内嵌 Python 后端 + WebView），GitHub Actions 自动构建签名 APK，发布在 [Releases](https://github.com/yuccc7878/runninghub-webui/releases) 页面，手机直接安装使用。
+
+## 安全说明
+
+- **代码零硬编码密钥**：所有 API Key 均为运行时注入，保存在本地 `workflows/api_key.json`（已 gitignore）
+- 本仓库只包含代码，不含任何生成产物、素材、状态数据
+- 请自行保管好 RunningHub / LLM 密钥，勿提交到公开仓库
+
+## 免责声明
+
+本项目用于个人学习与自用研究。请遵守 RunningHub 平台用户协议，合理使用 API 额度。
+
+---
+
+**关键词**：RunningHub、runninghub-webui、本地跑图台、文生图、图生图、视频生成、AI 润色、异步任务、WebUI、AIGC、AI 绘画

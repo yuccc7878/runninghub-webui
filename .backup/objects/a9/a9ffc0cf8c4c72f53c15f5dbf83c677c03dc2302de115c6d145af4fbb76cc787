@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""拉取 RunningHub 二次元相关工作流，提取 LoraLoader 节点清单"""
+import json
+import urllib.request
+
+KEY = "63e1f602f33442b2b21ca7f6e9ac5041"
+BASE = "https://www.runninghub.ai"
+
+# 二次元/动漫相关候选：从市场搜索到的
+CANDIDATES = [
+    ("2075238623930310658", "二次元-文生图"),
+    ("2064736900497362945", "Z-Anime-基于ZIB底模的动漫风格模型"),
+    ("2060997037902094337", "Z-Anime动漫图片生成"),
+    ("2058139430866735105", "z-anime-distill-8step-漫画洗图"),
+    ("2074050647022125056", "Z-Anime动漫生图专属"),
+    ("2049498784266194945", "Z-Anime-自动提示词二次元动漫生成"),
+    ("2049428490881081346", "z_anime+illustrious 质感文生图+细节增强"),
+    ("2049120457999257602", "Z-Anime-漫画专用文生图"),
+    ("2049114813778890753", "Z-Anime-动漫文生图"),
+    ("2049079404013297665", "Z-Anime-漫画专用高清放大"),
+    ("2053379832075042817", "PiPi-Z-image Controlnet 转动漫"),
+    ("1924646326909194241", "anime street-真人转动漫"),
+    ("2049040240022659073", "Z-Anime动漫生图专属"),
+]
+
+
+def get_prompt(workflow_id):
+    body = json.dumps({"apiKey": KEY, "workflowId": workflow_id}).encode()
+    req = urllib.request.Request(
+        f"{BASE}/api/openapi/getJsonApiFormat",
+        data=body, method="POST",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {KEY}"},
+    )
+    try:
+        d = json.loads(urllib.request.urlopen(req, timeout=25).read().decode())
+    except Exception as e:
+        return None, f"请求失败: {e}"
+    if d.get("code") != 0:
+        return None, f"code={d.get('code')} {d.get('msg') or d.get('message') or ''}"
+    try:
+        return json.loads(d["data"]["prompt"]), None
+    except Exception as e:
+        return None, f"prompt解析失败: {e}"
+
+
+def extract_loras(prompt):
+    """提取所有 LoRA 节点: class_type 含 lora 或 inputs 里有 lora_name"""
+    found = []
+    for nid, node in (prompt or {}).items():
+        ct = str(node.get("class_type", ""))
+        ins = node.get("inputs", {}) or {}
+        lora_name = ins.get("lora_name") or ""
+        if "lora" in ct.lower() or lora_name:
+            found.append((nid, ct, lora_name, ins.get("strength_model"), ins.get("strength_clip")))
+    return found
+
+
+print("=== RunningHub 二次元工作流 + LoRA 节点扫描 ===\n")
+seen = {}
+for wid, name in CANDIDATES:
+    prompt, err = get_prompt(wid)
+    if err:
+        print(f"[{name}] ❌ {err}")
+        continue
+    loras = extract_loras(prompt)
+    print(f"[{name}] ({wid}) 节点数={len(prompt)} LoRA数={len(loras)}")
+    for nid, ct, ln, sm, sc in loras:
+        sm = sm if sm is not None else "-"
+        print(f"    - [{nid}] {ct} | {ln} | strength_model={sm}")
+        if ln:
+            seen.setdefault(ln, {"count": 0, "in": []})
+            seen[ln]["count"] += 1
+            seen[ln]["in"].append(name)
+    print()
+
+print("\n=== 去重 LoRA 文件清单 ===")
+for ln, info in sorted(seen.items(), key=lambda x: -x[1]["count"]):
+    print(f"• {ln}  (出现{info['count']}次: {', '.join(info['in'][:3])})")

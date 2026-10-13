@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""同步 webui.html 内嵌 EMBEDDED_SCRIPTS 里 krea2_t2i / krea2_i2i 的 LoRA 参数定义为 checkbox（一次性脚本）"""
+import re, sys
+
+path = "/data/data/com.ai.assistance.operit/files/workspace/runninghub/webui.html"
+s = open(path, encoding="utf-8").read()
+
+# 旧的 float 定义段（两种：t2i 无 denoise，i2i 带 denoise，但参数段本身一致）
+old_def = (
+    '{"k": "style", "label": "风格LoRA", "type": "float", "def": 0.5},'
+    ' {"k": "realism", "label": "写实LoRA", "type": "float", "def": 0.6},'
+    ' {"k": "body", "label": "身材LoRA", "type": "float", "def": 0.3}'
+)
+new_def = (
+    '{"k": "style", "label": "风格LoRA", "type": "checkbox", "def": true, "help": "勾选=启用风格LoRA"},'
+    ' {"k": "style_strength", "label": "风格LoRA强度", "type": "float", "def": 0.5, "group": "advanced"},'
+    ' {"k": "realism", "label": "写实LoRA", "type": "checkbox", "def": true, "help": "勾选=启用写实LoRA"},'
+    ' {"k": "realism_strength", "label": "写实LoRA强度", "type": "float", "def": 0.6, "group": "advanced"},'
+    ' {"k": "body", "label": "身材LoRA", "type": "checkbox", "def": true, "help": "勾选=启用身材LoRA"},'
+    ' {"k": "body_strength", "label": "身材LoRA强度", "type": "float", "def": 0.3, "group": "advanced"}'
+)
+
+n = s.count(old_def)
+print(f"匹配到 {n} 处旧定义")
+if n == 0:
+    sys.exit(1)
+
+s = s.replace(old_def, new_def)
+open(path, "w", encoding="utf-8").write(s)
+print("替换完成")

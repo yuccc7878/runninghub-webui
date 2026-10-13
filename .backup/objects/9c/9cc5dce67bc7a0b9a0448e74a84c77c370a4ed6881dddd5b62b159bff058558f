@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""zimage 原版 + 二次元关键词 对照：不挂 LoRA，验证主体能否靠提示词转二次元"""
+import sys, os, time
+
+sys.path.insert(0, "/data/data/com.ai.assistance.operit/files/workspace/runninghub/scripts")
+import rh_zimage_api as Z
+
+KEY = "63e1f602f33442b2b21ca7f6e9ac5041"
+Z.API_KEY = KEY
+Z.PROXY = f"{Z.BASE}/proxy/{KEY}"
+
+OUT_ROOT = "/sdcard/Download/Operit/runninghub_app/zimage_prompt_test"
+os.makedirs(OUT_ROOT, exist_ok=True)
+
+# 主体描述（固定）：双麻花辫 + 白吊带 + 牛仔短裤 + 浅灰背景
+SUBJECT = ("一位少女，棕色长发编成两条麻花辫垂在胸前两侧，"
+           "白色吊带背心，蓝色牛仔短裤，站在浅灰色背景前，正面全身")
+
+# 5 组：从写实到纯二次元的提示词梯度
+PROMPTS = [
+    ("写实_基准",   SUBJECT + "，超写实真人摄影，8k高清，真实皮肤纹理，棚拍布光", "写实摄影"),
+    ("二次元_关键词1", SUBJECT + "，二次元动漫风格插画，精致动漫脸，大眼，动漫上色，赛璐璐", "动漫插画"),
+    ("二次元_关键词2", SUBJECT + "，anime style, anime girl, cel shading, 2d illustration, vibrant colors, clean lineart", "anime"),
+    ("二次元_关键词3", SUBJECT + "，日系动漫风，美少女插画，高清壁纸，动漫渐变上色，梦幻光影", "日系动漫"),
+    ("二次元_关键词4", SUBJECT + "，日本动画风格，吉卜力风，宫崎骏，手绘动画质感，柔和水彩", "吉卜力"),
+]
+
+W, H = 1080, 1920
+STEPS = 12
+SEED = 20261016  # 新 seed，跟上次区分
+
+results = []
+print(f"[测试开始] {len(PROMPTS)} 张，seed={SEED}，无 LoRA，纯提示词对照\n", flush=True)
+
+for label, prompt, style in PROMPTS:
+    d = os.path.join(OUT_ROOT, label)
+    os.makedirs(d, exist_ok=True)
+    print(f"===== {label} =====", flush=True)
+    print(f"风格目标: {style}", flush=True)
+    t0 = time.time()
+    try:
+        res = Z.run(
+            prompt_text=prompt,
+            width=W, height=H,
+            steps=STEPS,
+            seed=SEED,
+            lora=None,          # 关键：不挂 LoRA，纯原版
+            download_dir=d,
+        )
+        saved = res.get("saved", [])
+        if saved:
+            # 重命名
+            src = saved[0]
+            dst = os.path.join(d, f"{label}_seed{SEED}.png")
+            if os.path.exists(src) and not os.path.exists(dst):
+                os.replace(src, dst)
+            results.append((label, dst, os.path.getsize(dst) if os.path.exists(dst) else 0, f"{time.time()-t0:.0f}s"))
+            print(f"✅ {label} 完成: {dst} ({results[-1][2]}B, {results[-1][3]})\n", flush=True)
+        else:
+            results.append((label, "无输出", 0, f"{time.time()-t0:.0f}s"))
+            print(f"⚠️ {label} 无输出\n", flush=True)
+    except Exception as e:
+        results.append((label, f"ERROR: {e}", 0, f"{time.time()-t0:.0f}s"))
+        print(f"❌ {label} 失败: {type(e).__name__}: {e}\n", flush=True)
+
+print("\n\n============= 汇总 =============", flush=True)
+for label, path, size, dur in results:
+    print(f"• {label:20s} | {dur:>6s} | {size:>8d}B | {path}", flush=True)
+print(f"\n输出目录: {OUT_ROOT}", flush=True)

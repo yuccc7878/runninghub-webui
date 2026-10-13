@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="version" content="v0.4.8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>洛宝跑图台 v0.4.8 · RunningHub WebUI</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#262b36;--tx:#e6e9ef;--dim:#8b93a7;--acc:#e0a03c;--ok:#4caf7d;--err:#e0564c;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);font:14px/1.6 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;padding:20px}
+h1{font-size:20px;margin-bottom:4px} h1 span{color:var(--acc)}
+.ver{font-size:11px;color:var(--dim);background:#1c212b;border:1px solid var(--line);padding:1px 8px;border-radius:10px;vertical-align:3px;font-weight:600}
+.sub{color:var(--dim);font-size:12px;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:320px 1fr;gap:16px;align-items:start}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+.card h2{font-size:14px;color:var(--acc);margin-bottom:12px;border-bottom:1px solid var(--line);padding-bottom:8px}
+label{display:block;font-size:12px;color:var(--dim);margin:10px 0 4px}
+input,select,textarea{width:100%;background:#0d0f13;border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:8px 10px;font-size:13px}
+textarea{min-height:120px;resize:vertical}
+input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
+.btn{display:inline-block;background:var(--acc);color:#1a1a1a;border:none;border-radius:8px;padding:10px 18px;font-weight:700;font-size:14px;cursor:pointer;margin-top:14px}
+.btn:hover{filter:brightness(1.1)}
+.script{cursor:pointer;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;transition:.15s}
+.script:hover{border-color:var(--acc)}
+.script.active{border-color:var(--acc);background:#1c212b}
+.script b{font-size:13px} .script small{color:var(--dim);display:block;font-size:11px;margin-top:2px}
+.tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:4px;background:#1c212b;color:var(--dim);margin-left:6px;vertical-align:1px}
+.task{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:8px}
+.task .head{display:flex;gap:8px;align-items:center;font-size:12px}
+.st{font-size:10px;padding:2px 8px;border-radius:10px}
+.st.queued{background:#2a3a52;color:#8ab4f8}.st.submitting{background:#3a3425;color:#e8c46a}
+.st.done{background:#1f3a2c;color:#6fd39a}.st.error{background:#3a2220;color:#f09086}
+.task img{max-width:100%;border-radius:6px;margin-top:8px}
+.meta{color:var(--dim);font-size:11px;margin-top:6px}
+.err{color:var(--err);font-size:12px;margin-top:6px;white-space:pre-wrap}
+.hint{color:var(--dim);font-size:11px;margin-top:4px}
+#toast{position:fixed;top:16px;right:16px;background:#1c212b;border:1px solid var(--line);padding:10px 16px;border-radius:8px;font-size:13px;display:none;z-index:99}
+/* ===== 顶栏按钮（跟随页面，不悬浮） ===== */
+.topbar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.topbar button{background:#1f2530;border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:8px 14px;font-weight:700;font-size:13px;cursor:pointer;transition:.15s}
+.topbar button:hover{border-color:var(--acc);filter:brightness(1.1)}
+.topbar #drawerBtn{background:var(--acc);color:#1a1a1a;border:none}
+/* ===== 侧边抽屉（历史任务） ===== */
+#mask{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:97;display:none}
+#drawer{position:fixed;top:0;right:-390px;width:380px;max-width:92vw;height:100vh;background:var(--card);border-left:1px solid var(--line);z-index:98;transition:right .25s ease;overflow-y:auto;padding:16px}
+#drawer.open{right:0}
+#drawer h2{font-size:14px;color:var(--acc);margin:0}
+.gtitle{font-size:13px;font-weight:700;color:var(--acc);margin:14px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.gcount{display:inline-block;font-size:10px;color:var(--dim);background:#1c212b;border-radius:8px;padding:0 7px;margin-left:6px;vertical-align:1px}
+/* ===== 历史任务 Tab 栏 ===== */
+#taskTabs{display:flex;gap:4px;flex-wrap:wrap;margin:6px 0 10px}
+#taskTabs .tab{flex:1;min-width:60px;background:#0d0f13;border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:5px 0;font-size:11px;cursor:pointer;transition:.15s;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#taskTabs .tab.active{background:var(--acc);border-color:var(--acc);color:#1a1a1a;font-weight:700}
+#taskTabs .tab .cnt{font-size:9px;opacity:.75;margin-left:2px}
+/* ===== 历史任务瀑布网格 ===== */
+#drawerTasks{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+#drawerTasks .tk{position:relative;border:1px solid var(--line);border-radius:8px;overflow:hidden;cursor:pointer;background:#0d0f13;transition:.15s;aspect-ratio:3/4}
+#drawerTasks .tk:hover{border-color:var(--acc);transform:translateY(-1px)}
+#drawerTasks .tk img{width:100%;height:100%;object-fit:cover;display:block}
+#drawerTasks .tk video{width:100%;height:100%;object-fit:cover;display:block}
+#drawerTasks .tk .play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:28px;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.7);pointer-events:none}
+#drawerTasks .tk .tkbar{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.85));padding:14px 6px 4px;display:flex;align-items:center;justify-content:space-between;gap:4px}
+#drawerTasks .tk .tkbar .st{font-size:9px;padding:1px 5px;border-radius:4px;font-weight:700}
+#drawerTasks .tk .tkbar .st.done{background:rgba(80,160,100,.85);color:#fff}
+#drawerTasks .tk .tkbar .st.error{background:rgba(200,80,80,.9);color:#fff}
+#drawerTasks .tk .tkbar .st.submitting,.tk .st.queued,.tk .st.running{background:rgba(224,160,60,.85);color:#1a1a1a}
+#drawerTasks .tk .tkbar .tm{font-size:9px;color:#ccc}
+#drawerTasks .tk .st.poll_timeout{background:rgba(160,120,220,.9);color:#fff}
+#drawerTasks .tk .st.done{background:rgba(80,160,100,.85);color:#fff}
+#taskMenu{position:fixed;z-index:200;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.6);min-width:140px;padding:4px;display:none}
+#taskMenu .tm-item{display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:12px;color:#eee;cursor:pointer;border-radius:7px;transition:.12s}
+#taskMenu .tm-item:hover{background:rgba(255,255,255,.08)}
+#taskMenu .tm-item.tm-del:hover{background:rgba(200,60,60,.25);color:#ff9d9d}
+#taskMenu .tm-item.tm-insp:hover{background:rgba(90,150,255,.25);color:#9dc4ff}
+#taskMenu .tm-item.tm-exp:hover{background:rgba(60,190,120,.25);color:#8ff0be}
+#taskMenu .tm-item.tm-rerun:hover{background:rgba(224,160,60,.25);color:#ffd28a}
+#drawerTasks .tk .nothumb{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:8px;text-align:center;color:var(--dim);font-size:10px;gap:4px}
+#drawerTasks .tk .nothumb .prompt{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;word-break:break-all}
+/* ===== 大图预览弹层 ===== */
+#previewMask{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100;display:none}
+#previewBox{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);max-width:88vw;max-height:86vh;z-index:101;display:none;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 8px 50px rgba(0,0,0,.6)}
+#previewBox img,#previewBox video{max-width:88vw;max-height:70vh;display:block;margin:0 auto}
+#previewBox .pvinfo{padding:10px 14px;font-size:11px;color:var(--dim);max-height:16vh;overflow-y:auto}
+#previewBox .pvclose{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.6);border:none;color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;z-index:2}
+/* ===== 参考图缩略图网格 ===== */
+.refgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:4px}
+.refgrid .rg{position:relative;border:2px solid var(--line);border-radius:8px;overflow:hidden;cursor:pointer;aspect-ratio:3/4;background:#0d0f13;transition:.15s}
+.refgrid .rg:hover{border-color:var(--acc)}
+.refgrid .rg.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.refgrid .rg img{width:100%;height:100%;object-fit:cover;display:block}
+.refgrid .rg .x{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.65);color:#fff;border:none;border-radius:50%;width:18px;height:18px;line-height:16px;font-size:11px;text-align:center;cursor:pointer;display:none}
+.refgrid .rg.sel .x{display:block}
+.refgrid .rg .del{position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,.65);color:#fff;border:none;border-radius:4px;width:20px;height:20px;line-height:18px;font-size:12px;text-align:center;cursor:pointer;display:none}
+.refgrid .rg:hover .del{display:block}
+.refgrid .rg .del:hover{background:var(--err)}
+/* 参考图 tab */
+.reftabs{display:flex;gap:6px;margin-bottom:10px}
+.rftab{flex:1;background:#0d0f13;border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:6px 0;font-size:12px;cursor:pointer;transition:.15s}
+.rftab.active{background:var(--acc);border-color:var(--acc);color:#1a1a1a;font-weight:700}
+.rftab .cnt{font-size:10px;opacity:.7;margin-left:3px}
+.refgrid .rg .badge{position:absolute;bottom:2px;left:2px;background:rgba(0,0,0,.7);color:#fff;font-size:9px;padding:1px 5px;border-radius:4px}
+/* 参数区 ref 小缩略图选择器 */
+.refpick{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.refpick .rp{width:52px;height:68px;border:2px solid var(--line);border-radius:6px;overflow:hidden;cursor:pointer;background:#0d0f13;position:relative;transition:.15s;flex-shrink:0}
+.refpick .rp:hover{border-color:var(--acc)}
+.refpick .rp.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.refpick .rp img{width:100%;height:100%;object-fit:cover;display:block}
+.refpick .rp .ck{position:absolute;top:1px;left:1px;background:var(--acc);color:#1a1a1a;font-size:9px;line-height:1;padding:2px 3px;border-radius:3px;display:none;font-weight:700}
+.refpick .rp.sel .ck{display:block}
+.refpick .rp.none{display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--dim);border-style:dashed}
+/* 市场面板 ref 兜底（防容器层丢失时图片撑爆） */
+.refpick-wrap .rp{width:52px;height:68px;overflow:hidden;position:relative;flex-shrink:0}
+.refpick-wrap .rp img{width:100%;height:100%;object-fit:cover;display:block}
+/* ===== 密钥设置弹窗 ===== */
+#setMask{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:98;display:none}
+#setModal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:360px;max-width:92vw;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;z-index:99;display:none;box-shadow:0 8px 40px rgba(0,0,0,.5)}
+#setModal h3{font-size:15px;color:var(--acc);margin-bottom:4px}
+.settab{flex:1;background:#0d0f13;border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:6px 0;font-size:12px;cursor:pointer;transition:.15s}
+.settab.active{background:var(--acc);border-color:var(--acc);color:#1a1a1a;font-weight:700}
+#llmBaseUrl,#llmModel,#llmApiKey,#llmStyle{margin-top:8px}
+/* ---- LoRA 开关行：勾选在标题前 ---- */
+.lora-line{display:flex;align-items:center;gap:8px;margin:2px 0 8px;flex-wrap:wrap}
+.lora-line .chk-box{position:relative;width:20px;height:20px;flex:0 0 20px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.lora-line .chk-box input{position:absolute;opacity:0;width:100%;height:100%;cursor:pointer;margin:0;z-index:1}
+.lora-line .chk-box .box{width:18px;height:18px;border:2px solid var(--line);border-radius:5px;background:#0d0f13;transition:.15s;display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:#fff}
+.lora-line .chk-box input:checked + .box{background:var(--acc);border-color:var(--acc)}
+.lora-line .chk-box input:checked + .box::after{content:"✓";color:#1a1a1a;font-weight:700;line-height:1}
+.lora-line .lora-title{font-weight:500;font-size:13px;cursor:pointer;user-select:none}
+.lora-line .lora-strength{width:58px;margin-left:auto;text-align:center;border:1px solid var(--line);background:#0d0f13;color:var(--tx);border-radius:6px;padding:2px 4px;font-size:13px;height:auto}
+.lora-line .lora-desc{width:100%;padding-left:28px;color:var(--dim);font-size:11px;line-height:1.5}
+</style>
+</head>
+<body>
+<h1>洛宝<span>跑图台</span> <span class="ver">v0.4.8</span></h1>
+<div class="sub">RunningHub 本地统一出图 · Zimage / Krea2 · 任务异步 · 出图直显 <span id="verInfo" style="margin-left:8px;color:var(--acc)"></span>
+  <button onclick="reconnectBackend()" style="margin-left:10px;background:#1f2530;border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:700">🔌 连接后端</button>
+</div>
+
+<div class="topbar">
+  <button id="drawerBtn" onclick="toggleDrawer(true)">📋 历史任务</button>
+  <button id="setBtn" onclick="openSettings()">⚙ 密钥</button>
+  <button id="marketBtn" onclick="toggleMarket(true)">🛒 应用市场</button>
+</div>
+<div id="setMask" onclick="closeSettings()"></div>
+<div id="setModal">
+  <h3>⚙ 设置</h3>
+  <div style="display:flex;gap:6px;margin:10px 0">
+    <button class="settab active" data-tab="rh" onclick="switchSetTab('rh')">RunningHub</button>
+    <button class="settab" data-tab="llm" onclick="switchSetTab('llm')">LLM 润色</button>
+    <button class="settab" data-tab="be" onclick="switchSetTab('be')">后端</button>
+  </div>
+
+  <div id="setpanel-rh">
+    <div class="hint" style="margin:4px 0 8px">RunningHub API Key（访问 runninghub.ai 复制）。保存后所有脚本生效。</div>
+    <div id="keyStatus" style="font-size:12px;color:var(--dim);margin:4px 0"></div>
+    <input type="password" id="apiKeyInput" placeholder="粘贴你的 RunningHub API Key" autocomplete="off">
+    <div id="balBox" style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:8px;background:#0d0f13">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:12px;color:var(--dim)">💰 账户点数</span>
+        <button onclick="refreshBalance()" style="background:var(--acc);color:#1a1a1a;border:none;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:700">刷新</button>
+      </div>
+      <div id="balStatus" style="font-size:13px;color:var(--dim)">未查询</div>
+    </div>
+  </div>
+
+  <div id="setpanel-llm" style="display:none">
+    <div class="hint" style="margin:4px 0 8px">OpenAI 兼容接口，用于 AI 润色提示词。填你自己的服务即可。</div>
+    <div id="llmStatus" style="font-size:12px;color:var(--dim);margin:4px 0"></div>
+    <input id="llmBaseUrl" placeholder="Base URL，如 https://api.deepseek.com 或 /v1">
+    <input id="llmModel" placeholder="模型名，如 deepseek-chat / gpt-4o-mini">
+    <input type="password" id="llmApiKey" placeholder="LLM API Key" autocomplete="off">
+    <select id="llmStyle">
+      <option value="natural">输出风格：自然语言段落</option>
+      <option value="tags">输出风格：英文逗号 tags</option>
+      <option value="brief">输出风格：简练关键词</option>
+    </select>
+  </div>
+
+  <div id="setpanel-be" style="display:none">
+    <div class="hint" style="margin:4px 0 8px">后端服务运行状态。若页面提示"后端未连接"，可在此查看状态或手动重启。</div>
+    <div id="beStatus" style="font-size:12px;color:var(--dim);margin:4px 0;white-space:pre-wrap;line-height:1.8"></div>
+    <button class="btn" style="margin-top:10px;width:100%;padding:8px" onclick="restartBackend()">🔁 重启后端</button>
+    <div class="hint" style="margin-top:8px">重启后页面会自动重连，历史任务保留。</div>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-top:14px">
+    <button class="btn" style="margin:0;flex:1" onclick="saveSettings()">💾 保存</button>
+    <button class="btn" style="margin:0;flex:1;background:#3a3f4b" onclick="closeSettings()">取消</button>
+  </div>
+</div>
+<div id="mask" onclick="toggleDrawer(false)"></div>
+<aside id="drawer">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <h2>📋 历史任务</h2>
+      <button class="btn" style="margin:0;padding:3px 8px;font-size:10px;background:#3a3f4b" onclick="clearTasks()">清空</button>
+    </div>
+    <button class="btn" style="margin:0;padding:4px 10px;font-size:11px;background:#3a3f4b" onclick="toggleDrawer(false)">✕</button>
+  </div>
+  <div class="hint">按脚本分组，新任务在上</div>
+  <div id="taskTabs"></div>
+  <div id="drawerTasks" style="margin-top:8px"></div>
+</aside>
+
+<!-- 大图预览弹层 -->
+<div id="previewMask" onclick="closePreview()"></div>
+<div id="previewBox">
+  <button class="pvclose" onclick="closePreview()">✕</button>
+  <div id="pvMedia"></div>
+  <div id="pvInfo" class="pvinfo"></div>
+</div>
+
+<!-- 重跑确认弹窗 -->
+<div id="rerunMask" onclick="closeRerun()" style="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:102;display:none"></div>
+<div id="rerunBox" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:420px;max-width:92vw;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;z-index:103;display:none;box-shadow:0 8px 40px rgba(0,0,0,.5)">
+  <h3 style="font-size:14px;color:var(--acc);margin-bottom:8px">↻ 重跑任务</h3>
+  <div id="rerunInfo" style="font-size:12px;color:var(--dim);margin-bottom:14px;max-height:140px;overflow-y:auto;word-break:break-all"></div>
+  <div style="display:flex;gap:8px">
+    <button class="btn" style="margin:0;flex:1" onclick="doRerun()">✅ 确认重跑</button>
+    <button class="btn" style="margin:0;flex:1;background:#3a3f4b" onclick="closeRerun()">取消</button>
+  </div>
+</div>
+
+<!-- 删除任务确认弹窗 -->
+<div id="delMask" onclick="closeDel()" style="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:104;display:none"></div>
+<div id="delBox" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:420px;max-width:92vw;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;z-index:105;display:none;box-shadow:0 8px 40px rgba(0,0,0,.5)">
+  <h3 style="font-size:14px;color:var(--err);margin-bottom:8px">🗑 删除任务</h3>
+  <div id="delInfo" style="font-size:12px;color:var(--dim);margin-bottom:14px;max-height:140px;overflow-y:auto;word-break:break-all"></div>
+<div style="display:flex;gap:8px">
+    <button class="btn" style="margin:0;flex:1;background:#c0392b" onclick="doDel()">🗑 确认删除</button>
+    <button class="btn" style="margin:0;flex:1;background:#3a3f4b" onclick="closeDel()">取消</button>
+  </div></div>
+
+<!-- 任务长按菜单 -->
+<div id="taskMenu">
+  <div class="tm-item tm-insp" onclick="var _t=MENU_TASK;hideTaskMenu();inspectTask(_t)">🔍 错误查询</div>
+  <div class="tm-item tm-exp" onclick="var _t=MENU_TASK;hideTaskMenu();exportTask(_t)">💾 保存到相册</div>
+  <div class="tm-item tm-rerun" onclick="var _t=MENU_TASK;hideTaskMenu();rerunTask(_t?._id||_t?.id)">↻ 再次提交</div>
+  <div class="tm-item tm-del" onclick="var _t=MENU_TASK;hideTaskMenu();delTask(_t?._id||_t?.id)">🗑 删除</div>
+</div>
+
+<!-- ===== 应用市场面板 ===== -->
+<div id="marketMask" onclick="toggleMarket(false)" style="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:96;display:none"></div>
+<div id="marketPanel" style="position:fixed;top:0;right:-720px;width:700px;max-width:94vw;height:100vh;background:var(--card);border-left:1px solid var(--line);z-index:97;transition:right .25s ease;overflow-y:auto;padding:16px;display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <h2 style="font-size:14px;color:var(--acc);margin:0">🛒 应用市场</h2>
+    <div>
+      <button class="btn" style="margin:0;padding:4px 10px;font-size:11px;background:#3a3f4b" onclick="toggleMarket(false)">✕</button>
+    </div>
+  </div>
+  <div id="marketBody" style="font-size:12px;color:var(--dim)">加载中…</div>
+</div>
+
+<div class="grid">
+<div>
+  <div class="card">
+    <h2>① 脚本</h2>
+    <div id="scriptList"></div>
+<div class="card">
+    <h2>② 参考图（图生图用）</h2>
+    <div class="reftabs">
+      <button class="rftab active" data-mode="refs" onclick="setRefTab('refs')">素材库</button>
+      <button class="rftab" data-mode="outs" onclick="setRefTab('outs')">出图产物</button>
+    </div>
+    <div id="refGrid" class="refgrid"></div>
+    <div style="margin-top:10px" id="refSelected"><span class="hint">未选择（= 文生图）</span></div>
+    <div class="hint" style="margin-top:8px">上传新参考图：</div>
+    <input type="file" id="refFile" accept="image/*">
+    <button class="btn" style="margin-top:8px;padding:6px 12px;font-size:12px" onclick="uploadRef()">上传</button>
+  </div>
+  </div>
+<div class="card">
+    <h2>③ 提示词</h2>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <button class="btn" id="polishBtn" style="margin:0;flex:1;padding:6px 12px;font-size:12px" onclick="polishPrompt()">✨ AI 润色</button>
+      <button class="btn" id="revertBtn" style="margin:0;padding:6px 12px;font-size:12px;background:#3a3f4b" onclick="revertPrompt()" title="撤销上次润色">↩ 撤销</button>
+    </div>
+    <textarea id="prompt" placeholder="输入画面描述…（AI 润色自动注入洛宝锚点）"></textarea>
+    <input type="hidden" id="lastRawPrompt" value="">
+  </div>
+<div class="card">
+    <h2>④ 参数</h2>
+    <div id="params"></div>
+    <button class="btn" id="runBtn" onclick="submit()">🚀 提交跑图</button>
+  </div>
+</div>
+</div>
+</div>
+<div id="toast"></div>
+
+<script>
+const EMBEDDED_SCRIPTS={"zimage_i2i":{"name":"Zimage 图生图/文生图 (I2I+T2I)","desc":"参考图换人/换姿势（选图=图生图）/ 纯提示词生图（不选图=文生图）。主力方案","module":"rh_zimage_api","mode":"i2i","params":[{"k":"resolution","label":"分辨率","type":"select","options":[{"v":"768x1368","label":"768×1368（竖屏 9:16 · 省币）"},{"v":"1080x1920","label":"1080×1920（竖屏 9:16 · 推荐）"},{"v":"1242x2688","label":"1242×2688（竖屏 9:16 · 高清）"},{"v":"1024x1024","label":"1024×1024（方形 1:1）"},{"v":"1368x768","label":"1368×768（横屏 16:9 · 省币）"},{"v":"1920x1080","label":"1920×1080（横屏 16:9 · 高清）"}],"def":"1080x1920"},{"k":"steps","label":"步数","type":"int","def":12},{"k":"denoise","label":"重绘强度","type":"float","def":0.7,"help":"0.5-0.6锁姿势 / 0.7平衡 / 0.85+大幅改写"},{"k":"lora","label":"LoRA","type":"select","options":[{"v":"none","label":"无"},{"v":"charm","label":"charm · 风情万种人像（细节/锐度最高，欧美骨相+重影调）"},{"v":"nofilter","label":"nofilter · 无滤真实（去AI味/素人感，肤质真实，会轻微改脸）"},{"v":"flowdpo","label":"flowdpo · 真实感光影（治扁平/过曝/塑料感）"},{"v":"model","label":"model · 全能模特展示（强度0.45/步数10）"},{"v":"peach","label":"peach · 蜜桃臀加强（⚠会改脸型，仅限不露脸构图）"},{"v":"zanime","label":"zanime · 二次元动漫化（真人转二次元，选图生图用）"}],"def":"none"},{"k":"lora_strength","label":"LoRA强度","type":"float","def":0.7,"help":"仅 LoRA≠none 时生效"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]},"krea2_t2i":{"name":"Krea2 文生图 (T2I)","desc":"纯文生图，Krea2 底模，支持权重语法 (词:1.5)","module":"rh_krea2_nsfw","mode":"t2i","params":[{"k":"model","label":"底模","type":"select","options":[{"v":"gptruth","label":"GPTruth（写实向，推荐）"},{"v":"nsfw","label":"NSFW V4（能出裸体）"},{"v":"redcraft23","label":"RedCraft23（工作流默认）"},{"v":"redmix","label":"RedMix（写实混合）"},{"v":"moody","label":"Moody（氛围向）"},{"v":"muse","label":"Muse（艺术向）"},{"v":"turbo","label":"Turbo（加速模型，快但略降质）"}],"def":"gptruth"},{"k":"ratio","label":"比例","type":"select","options":["9:16","16:9","1:1","2:3","3:2","3:4","4:3","21:9"],"def":"9:16"},{"k":"mp","label":"分辨率","type":"select","options":[{"v":"0.5","label":"0.5 MP（低清快出）"},{"v":"1.0","label":"1 MP（标清）"},{"v":"2.0","label":"2 MP ≈1080×1920（推荐）"},{"v":"4.0","label":"4 MP（2K级）"},{"v":"8.0","label":"8 MP（超高清）"}],"def":"2.0","help":"2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},{"k":"steps","label":"步数","type":"int","def":12},{"k":"style","label":"画风LoRA · 风情万种","type":"lora","def":true,"def_strength":0.5,"help":"风情万种画风，整体氛围色调"},{"k":"realism","label":"写实LoRA · 真实感引擎","type":"lora","def":true,"def_strength":0.6,"help":"皮肤真实质感，去AI感"},{"k":"body","label":"身材LoRA · 天魔","type":"lora","def":true,"def_strength":0.3,"help":"身材曲线强化（丰胸细腰翘臀）"},{"k":"prompt_weight","label":"PromptWeight","type":"float","def":1.0,"help":"0=禁用；>0 启用 (词:1.5) 权重语法"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"},{"k":"cfg","label":"CFG","type":"float","def":1.0,"help":"Krea2 建议 1.0","group":"advanced"},{"k":"sampler","label":"采样器","type":"select","options":["euler","euler_ancestral","dpmpp_2m","dpmpp_2m_sde","dpmpp_sde","uni_pc"],"def":"euler","group":"advanced"},{"k":"scheduler","label":"调度器","type":"select","options":["simple","normal","karras","sgm_uniform"],"def":"simple","group":"advanced"},{"k":"shift","label":"AuraFlow shift","type":"float","def":3.0,"group":"advanced"},{"k":"rebalance","label":"Rebalance","type":"select","options":["balanced","detail","subtle","uniform","custom"],"def":"detail","group":"advanced"},{"k":"vae","label":"VAE","type":"select","options":["default","hdr","sharp","hd"],"def":"default","help":"hdr 磨皮严重，default 保细节","group":"advanced"},{"k":"out_format","label":"输出格式","type":"select","options":["png","jpg"],"def":"png","group":"advanced"}]},"krea2_i2i":{"name":"Krea2 图生图 (I2I)","desc":"Krea2 + 参考图注入 (LoadImage→VAEEncode)，保持角色改姿势","module":"rh_krea2_nsfw","mode":"i2i","params":[{"k":"model","label":"底模","type":"select","options":[{"v":"gptruth","label":"GPTruth（写实向，推荐）"},{"v":"nsfw","label":"NSFW V4（能出裸体）"},{"v":"redcraft23","label":"RedCraft23（工作流默认）"},{"v":"redmix","label":"RedMix（写实混合）"},{"v":"moody","label":"Moody（氛围向）"},{"v":"muse","label":"Muse（艺术向）"},{"v":"turbo","label":"Turbo（加速模型，快但略降质）"}],"def":"gptruth"},{"k":"ratio","label":"比例","type":"select","options":["9:16","16:9","1:1","2:3","3:2","3:4","4:3","21:9"],"def":"9:16"},{"k":"mp","label":"分辨率","type":"select","options":[{"v":"0.5","label":"0.5 MP（低清快出）"},{"v":"1.0","label":"1 MP（标清）"},{"v":"2.0","label":"2 MP ≈1080×1920（推荐）"},{"v":"4.0","label":"4 MP（2K级）"},{"v":"8.0","label":"8 MP（超高清）"}],"def":"2.0","help":"2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},{"k":"steps","label":"步数","type":"int","def":12},{"k":"denoise","label":"重绘强度","type":"float","def":0.65},{"k":"style","label":"画风LoRA · 风情万种","type":"lora","def":true,"def_strength":0.5,"help":"风情万种画风，整体氛围色调"},{"k":"realism","label":"写实LoRA · 真实感引擎","type":"lora","def":true,"def_strength":0.6,"help":"皮肤真实质感，去AI感"},{"k":"body","label":"身材LoRA · 天魔","type":"lora","def":true,"def_strength":0.3,"help":"身材曲线强化（丰胸细腰翘臀）"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"},{"k":"cfg","label":"CFG","type":"float","def":1.0,"help":"Krea2 建议 1.0","group":"advanced"},{"k":"sampler","label":"采样器","type":"select","options":["euler","euler_ancestral","dpmpp_2m","dpmpp_2m_sde","dpmpp_sde","uni_pc"],"def":"euler","group":"advanced"},{"k":"scheduler","label":"调度器","type":"select","options":["simple","normal","karras","sgm_uniform"],"def":"simple","group":"advanced"},{"k":"shift","label":"AuraFlow shift","type":"float","def":3.0,"group":"advanced"},{"k":"rebalance","label":"Rebalance","type":"select","options":["balanced","detail","subtle","uniform","custom"],"def":"detail","group":"advanced"},{"k":"vae","label":"VAE","type":"select","options":["default","hdr","sharp","hd"],"def":"default","help":"hdr 磨皮严重，default 保细节","group":"advanced"},{"k":"out_format","label":"输出格式","type":"select","options":["png","jpg"],"def":"png","group":"advanced"}]},"h3_flf_video":{"name":"MiniMaxH3 首尾帧视频 (I2V)","desc":"首帧图(→尾帧图) → 视频。支持单段/续接，输出 mp4","module":"rh_h3_flf_api","mode":"video","params":[{"k":"first_ref","label":"首帧图","type":"ref","def":""},{"k":"last_ref","label":"尾帧图(可选)","type":"ref","def":""},{"k":"ratio","label":"比例","type":"select","options":["9:16 (Portrait Widescreen)","16:9 (Widescreen)","1:1 (Square)","3:4 (Portrait Standard)","4:3 (Standard)","21:9 (Ultrawide)"],"def":"9:16 (Portrait Widescreen)"},{"k":"megapixels","label":"分辨率","type":"select","options":[{"v":"0.25","label":"0.25 MP（低清快出）"},{"v":"0.4","label":"0.4 MP（标清）"},{"v":"0.6","label":"0.6 MP（推荐）"},{"v":"0.9","label":"0.9 MP（高清）"},{"v":"1.2","label":"1.2 MP（超清）"}],"def":"0.6"},{"k":"duration","label":"时长(秒)","type":"float","def":5,"help":"视频长度，越长越贵"},{"k":"steps","label":"步数","type":"int","def":8},{"k":"lora","label":"LoRA","type":"select","options":["none","synthpussy","realface","cinematic","physics","nokia"],"def":"none"},{"k":"lora_strength","label":"LoRA强度","type":"float","def":0.9,"help":"仅 LoRA≠none 时生效","group":"advanced"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]},"h3_omni_video":{"name":"MiniMaxH3 全能视频 (T2V/参考)","desc":"全能力：文生视频 / 参考图/视频/音频 omni，输出 mp4","module":"rh_workflow_api","mode":"video","params":[{"k":"ref_image","label":"参考图(可选)","type":"ref","def":""},{"k":"mode","label":"模式","type":"select","options":[{"v":"","label":"自动(有参考图→omni，无→文生视频)"},{"v":"text_to_video","label":"文生视频 T2V"},{"v":"omni_reference","label":"参考图驱动 omni"}],"def":""},{"k":"ratio","label":"比例","type":"select","options":["9:16 (Portrait Widescreen)","16:9 (Widescreen)","1:1 (Square)","3:4 (Portrait Standard)","4:3 (Standard)","21:9 (Ultrawide)"],"def":"9:16 (Portrait Widescreen)"},{"k":"megapixels","label":"分辨率","type":"select","options":[{"v":"0.25","label":"0.25 MP（低清快出）"},{"v":"0.4","label":"0.4 MP（标清）"},{"v":"0.6","label":"0.6 MP（推荐）"},{"v":"0.9","label":"0.9 MP（高清）"},{"v":"1.2","label":"1.2 MP（超清）"}],"def":"0.4"},{"k":"duration","label":"时长(秒)","type":"float","def":5,"help":"视频长度，越长越贵"},{"k":"steps","label":"步数","type":"int","def":8},{"k":"lora","label":"LoRA","type":"select","options":["none","synthpussy","realface","cinematic","physics","nokia"],"def":"none"},{"k":"lora_strength","label":"LoRA强度","type":"float","def":0.9,"help":"仅 LoRA≠none 时生效","group":"advanced"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]},"illustrious_t2i":{"name":"Illustrious 二次元文生图 (T2I)","desc":"WAI-illustrious-SDXL 二次元底模（自带动漫画风）。可选加 Smooth_Booster 画质增强 / Cunnystyle 插画微调。半写实 CG 动漫风","module":"rh_illustrious_api","mode":"t2i","params":[{"k":"resolution","label":"分辨率","type":"select","options":[{"v":"936x1368","label":"936×1368（竖屏 9:16 · 推荐）"},{"v":"768x1344","label":"768×1344（竖屏 9:16 · 低清）"},{"v":"1080x1920","label":"1080×1920（竖屏 9:16 · 高清，更贵）"},{"v":"1216x832","label":"1216×832（横屏 16:9）"},{"v":"1024x1024","label":"1024×1024（方形 1:1）"}],"def":"936x1368"},{"k":"steps","label":"步数","type":"int","def":20},{"k":"cfg","label":"CFG","type":"float","def":2.0,"help":"Illustrious 系建议 2.0 左右"},{"k":"smooth","label":"画质增强 Smooth_Booster","type":"lora","def":true,"def_strength":0.9,"help":"画质平滑/细节增强（通用，二次元底模也适用）"},{"k":"cunnystyle","label":"插画微调 Cunnystyle","type":"lora","def":false,"def_strength":0.8,"help":"平台工作流自带插画风格微调（底模已是二次元，这层可选加味，具体效果待实测）"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]}};
+let SCRIPTS={}, CUR=null, API_BASE='', REF_LIST=[], OUT_LIST=[], CUR_REF='', REF_MODE='refs';
+const $=id=>document.getElementById(id);
+function toast(msg){const t=$('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2600)}
+async function api(url,opt){
+  // 同源 → 若失败自动 fallback 到本地后端；8s 超时防外部接口卡死
+  const tryFetch=async base=>{
+    const ctl=new AbortController();
+    const timer=setTimeout(()=>ctl.abort(),8000);
+    try{
+      const r=await fetch(base+url,{...opt,signal:ctl.signal});
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return r.json();
+    }finally{clearTimeout(timer)}
+  };
+  try{
+    return await tryFetch(API_BASE);
+  }catch(e){
+    if(!API_BASE){
+      API_BASE='http://127.0.0.1:__API_PORT__';
+      // 占位符未被后端替换 → 说明是直开 webui.html（file://），自动探测常用端口
+      if(API_BASE.includes('__API_PORT__')){
+        for(const p of [8770, 8765]){
+          try{return await tryFetch('http://127.0.0.1:'+p)}catch(e2){}
+        }
+        API_BASE='';throw e;
+      }
+      // 后端可能还在初始化（app 冷启动）：失败后短延迟重试最多 5 次
+      for(let i=0;i<5;i++){
+        try{return await tryFetch(API_BASE)}catch(e2){await new Promise(r=>setTimeout(r,1500*(i+1)))}
+      }
+      API_BASE='';throw e;
+    }
+    throw e;
+  }
+}
+
+// 手动重连后端：重置 API_BASE 后重新拉取脚本/素材/任务
+async function reconnectBackend(){
+  const btn=event.target;
+  const old=btn.textContent;
+  btn.disabled=true;
+  btn.textContent='连接中…';
+  API_BASE='';
+  try{
+    const d=await api('/api/backend');
+    if(d.ok){
+      toast('后端已连接 ✅ (端口 '+d.port+')');
+      await init();
+      toast('数据已刷新 ✅');
+    }else{
+      toast('后端异常: '+(d.error||''));
+    }
+  }catch(e){
+    toast('❌ 无法连接后端：'+((e&&e.message)||'未知错误'));
+  }finally{
+    btn.disabled=false;
+    btn.textContent=old;
+  }
+}
+
+async function init(){
+  try{
+    SCRIPTS=await api('/api/scripts');
+  }catch(e){
+    console.warn('API 不可用，使用内嵌参数表', e);
+    SCRIPTS=EMBEDDED_SCRIPTS;
+  }
+  const total=Object.values(SCRIPTS).reduce((n,v)=>n+v.params.length,0);
+  const meta=document.querySelector('meta[name="version"]');
+  const vi=$('verInfo');
+  const online=SCRIPTS!==undefined && !!SCRIPTS.zimage_i2i;
+  if(vi)vi.textContent=`v${meta?meta.content:''} · ${Object.keys(SCRIPTS).length}脚本 · ${total}参数`+
+    (SCRIPTS===EMBEDDED_SCRIPTS?' (离线兜底)':'');
+  const sl=$('scriptList');
+  sl.innerHTML='';
+  Object.entries(SCRIPTS).forEach(([k,v])=>{
+    const d=document.createElement('div');
+    d.className='script';d.dataset.k=k;
+    const modeTag=v.mode==='video'?'视频':(k==='zimage_i2i'?'图文双模':'图生图');
+    d.innerHTML=`<b>${v.name}</b><span class="tag">${modeTag}</span><small>${v.desc}</small>`;
+    d.onclick=()=>selectScript(k);
+    sl.appendChild(d);
+  });
+  selectScript(Object.keys(SCRIPTS)[0]);
+  refreshRefs();
+  refreshTasks();
+  renderKeyBadge();
+}
+
+// 副标题显示密钥状态小圆点
+async function renderKeyBadge(){
+  const vi=$('verInfo');
+  try{
+    const d=await api('/api/settings');
+    if(vi && !vi.textContent.includes('🔑')){
+      vi.textContent+=d.api_key_set?' · 🔑已设':' · 🔑未设';
+    }
+  }catch(e){}
+}
+
+function selectScript(k){
+  CUR=k;
+  document.querySelectorAll('.script').forEach(e=>e.classList.toggle('active',e.dataset.k===k));
+  const v=SCRIPTS[k];
+  const base=[], adv=[];
+  v.params.forEach(p=>(p.group==='advanced'?adv:base).push(p));
+  let html='';
+  const render=p=>{
+    const id='p_'+p.k;
+    let ctl;
+    if(p.type==='select'){
+      const opts=(p.options||[]).map(o=>{
+        if(typeof o==='object'&&o.v!==undefined){
+          return `<option value="${o.v}"${String(o.v)===String(p.def)?' selected':''}>${o.label||o.v}</option>`;
+        }
+        return `<option value="${o}"${o===p.def?' selected':''}>${o}</option>`;
+      }).join('');
+      ctl=`<select id="${id}">${opts}</select>`;
+    }else if(p.type==='text'){
+      ctl=`<input id="${id}" type="text" value="${p.def||''}"${p.placeholder?` placeholder="${p.placeholder}"`:''}>`;
+    }else if(p.type==='ref'){
+      ctl=`<div class="refpick-wrap" data-sync="${p.k==='ref_image'?'main':''}"><input type="hidden" class="refval" id="${id}" value="${p.def||''}"><div class="refpick"></div></div>`;
+    }else if(p.type==='lora'){
+      const st=(p.def_strength!==undefined?p.def_strength:0.5);
+      return `<div class="lora-line">
+        <label class="chk-box"><input type="checkbox" id="${id}" ${p.def?'checked':''}><span class="box"></span></label>
+        <label class="lora-title" for="${id}">${p.label}</label>
+        <input id="${id}_strength" class="lora-strength" type="number" step="0.01" min="0" max="2" value="${st}" title="LoRA 强度">
+        ${p.help?`<div class="lora-desc">${p.help}</div>`:''}
+      </div>`;
+    }else if(p.type==='checkbox'){
+      ctl=`<label class="chk"><input type="checkbox" id="${id}" ${p.def?'checked':''}><span>${p.def?'开':'关'}</span></label>`;
+    }else{
+      ctl=`<input id="${id}" type="number" step="${p.type==='float'?'0.01':'1'}" value="${p.def}">`;
+    }
+    return `<label>${p.label}${p.help?` <span style="color:#556;font-size:11px">— ${p.help}</span>`:''}</label>${ctl}`;
+  };
+  base.forEach(p=>html+=render(p));
+  if(adv.length){
+    html+=`<details style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px"><summary style="cursor:pointer;color:var(--acc);font-size:13px;user-select:none">⚙ 高级参数</summary><div style="margin-top:4px">${adv.map(render).join('')}</div></details>`;
+  }
+  $('params').innerHTML=html;
+  if(REF_LIST.length)document.querySelectorAll('.refpick-wrap').forEach(el=>renderRefPick(el));
+}
+
+async function refreshRefs(){
+  let d;
+  try{d=await api('/api/refs')}catch(e){d={refs:[],outputs:[]}}
+  REF_LIST=d.refs||[];
+  OUT_LIST=d.outputs||[];
+  // 更新 tab 计数
+  document.querySelectorAll('.rftab').forEach(b=>{
+    const cnt=b.dataset.mode==='refs'?REF_LIST.length:OUT_LIST.length;
+    b.innerHTML=(b.dataset.mode==='refs'?'素材库':'出图产物')+`<span class="cnt">${cnt}</span>`;
+  });
+  renderRefGrid();
+  document.querySelectorAll('.refpick-wrap').forEach(el=>renderRefPick(el));
+}
+
+function setRefTab(mode){
+  REF_MODE=mode;
+  document.querySelectorAll('.rftab').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
+  renderRefGrid();
+}
+
+function refThumb(name){
+  // out: 前缀 → 输出目录；否则 refs 目录（前缀不编码，只编码文件名）
+  const f=name.replace(/^out:/,'');
+  const u=(API_BASE||'')+'/refs/'+(name.startsWith('out:')?'out:':'')+encodeURIComponent(f);
+  return `<img src="${u}" loading="lazy" onerror="this.style.opacity=.15;this.title='加载失败'">`;
+}
+
+function renderRefGrid(){
+  const g=$('refGrid');
+  g.innerHTML='';
+  const list=REF_MODE==='refs'?REF_LIST:OUT_LIST;
+  if(!list.length){
+    g.innerHTML=`<div class="hint">${REF_MODE==='refs'?'暂无素材':'暂无出图产物'}</div>`;
+  }
+  list.forEach(name=>{
+    const d=document.createElement('div');
+    const val=(REF_MODE==='outs'?'out:':'')+name;
+    d.className='rg'+(val===CUR_REF?' sel':'');
+    d.dataset.name=val;
+    d.innerHTML=refThumb(val)+
+      (REF_MODE==='outs'?`<span class="badge">产物</span>`:'')+
+      `<span class="x" title="取消选择" onclick="event.stopPropagation();pickRef('')">✕</span>`+
+      `<span class="del" title="删除" onclick="event.stopPropagation();delRef('${val.replace(/'/g,"\\'")}')">🗑</span>`;
+    d.onclick=()=>pickRef(val);
+    g.appendChild(d);
+  });
+  const sel=$('refSelected');
+  sel.innerHTML=CUR_REF
+    ? `<span style="font-size:12px;color:var(--ok)">已选：${CUR_REF.split('/').pop()}</span>`
+    : '<span class="hint">未选择（= 文生图）</span>';
+}
+
+async function delRef(name){
+  const show=name.startsWith('out:')?name.slice(4):name;
+  if(!confirm(`删除 ${show}？\n（将从本地${name.startsWith('out:')?'输出目录':'refs目录'}永久删除）`))return;
+  try{
+    const r=await api('/api/refs/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name})});
+    if(r.ok){
+      toast('已删除 '+show);
+      if(CUR_REF===name)CUR_REF='';
+      await refreshRefs();
+    }else toast('删除失败: '+(r.error||''));
+  }catch(e){
+    toast('删除失败: 后端未连接');
+  }
+}
+
+function pickRef(name){
+  CUR_REF=name||'';
+  renderRefGrid();
+  // 同步到脚本参数里的 ref 控件
+  document.querySelectorAll('.rp').forEach(rp=>rp.classList.toggle('sel',rp.dataset.name===name));
+  // 隐藏字段同步
+  document.querySelectorAll('.refval').forEach(inp=>inp.value=CUR_REF);
+}
+
+function renderRefPick(el){
+  const inp=el.querySelector('.refval');
+  const pick=el.querySelector('.refpick');
+  pick.innerHTML='';
+  const cur=inp.value||'';
+  // “无”占位
+  const none=document.createElement('div');
+  none.className='rp none'+(cur===''?' sel':'');
+  none.dataset.name='';
+  none.textContent='无';
+  none.onclick=()=>{inp.value='';renderRefPick(el);if(el.dataset.sync==='main'){pickRef('')}};
+  pick.appendChild(none);
+  // 素材
+  REF_LIST.forEach(name=>{
+    const d=document.createElement('div');
+    d.className='rp'+(name===cur?' sel':'');
+    d.dataset.name=name;
+    d.innerHTML=refThumb(name)+`<span class="ck">✓</span>`;
+    d.onclick=()=>{
+      inp.value=(inp.value===name)?'':name;
+      renderRefPick(el);
+      if(el.dataset.sync==='main'){pickRef(name)}
+    };
+    pick.appendChild(d);
+  });
+  // 出图产物（out: 前缀）
+  OUT_LIST.forEach(name=>{
+    const val='out:'+name;
+    const d=document.createElement('div');
+    d.className='rp'+(val===cur?' sel':'');
+    d.dataset.name=val;
+    d.innerHTML=refThumb(val)+`<span class="badge" style="position:absolute;top:1px;right:1px;background:rgba(224,160,60,.9);color:#1a1a1a;font-size:8px;padding:1px 3px;border-radius:3px">出</span><span class="ck">✓</span>`;
+    d.onclick=()=>{
+      inp.value=(inp.value===val)?'':val;
+      renderRefPick(el);
+      if(el.dataset.sync==='main'){pickRef(val)}
+    };
+    pick.appendChild(d);
+  });
+}
+
+async function uploadRef(){
+  const f=$('refFile').files[0];
+  if(!f){toast('先选文件');return}
+  const fd=new FormData();fd.append('image',f);
+  let r;
+  try{
+    r=await fetch((API_BASE||'')+'/api/upload',{method:'POST',body:fd});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+  }catch(e){
+    const base=(API_BASE||'').includes('__API_PORT__')?'http://127.0.0.1:8770':(API_BASE||'http://127.0.0.1:8765');
+    try{r=await fetch(base+'/api/upload',{method:'POST',body:fd})}catch(e2){toast('上传失败: 后端未连接');return}
+  }
+  const j=await r.json();
+  if(j.ok){toast('已上传 '+j.name);$('refFile').value='';refreshRefs();pickRef(j.name);}
+  else toast('上传失败: '+j.error);
+}
+
+let SUBMIT_LOCK=false;  // 运行锁：有任务在跑(queued/submitting/poll_timeout)时禁止新提交
+const ACTIVE_STATES=['queued','submitting','running','poll_timeout'];
+function updateRunBtn(){
+  const btn=$('runBtn');
+  if(!btn)return;
+  if(SUBMIT_LOCK){
+    btn.disabled=true;btn.style.opacity=.55;
+    btn.textContent='⏳ 任务运行中…';
+  }else{
+    btn.disabled=false;btn.style.opacity='';
+    btn.textContent='🚀 提交跑图';
+  }
+}
+async function submit(){
+  if(SUBMIT_LOCK){toast('⚠ 已有任务在运行，请等待完成后再提交');return}
+  const v=SCRIPTS[CUR];
+  const params={ref_image:CUR_REF,prompt:$('prompt').value};
+  v.params.forEach(p=>{
+  if(p.type==='lora'){
+    const el=$('p_'+p.k), se=$('p_'+p.k+'_strength');
+    params[p.k]= el? !!el.checked : !!p.def;
+    params[p.k+'_strength']= se? parseFloat(se.value) : (p.def_strength!==undefined?p.def_strength:0.5);
+  }else{
+    const el=$('p_'+p.k);if(el)params[p.k]= p.type==='checkbox' ? !!el.checked : el.value;
+  }
+});
+  SUBMIT_LOCK=true;
+  updateRunBtn();
+  try{
+    const r=await api('/api/submit',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({script:CUR,params})});
+    if(r.task_id){
+      toast('已提交 '+r.task_id);
+      refreshTasks();   // 保持 SUBMIT_LOCK=true，按钮继续禁用（任务在跑）
+    }else{
+      toast('提交失败: '+(r.error||''));
+      SUBMIT_LOCK=false;updateRunBtn();
+    }
+  }catch(e){
+    toast('后端未连接！请确认服务已启动并刷新页面');
+    SUBMIT_LOCK=false;updateRunBtn();
+  }
+}
+
+let TASK_TAB='all';  // 当前历史任务 Tab
+
+async function refreshTasks(){
+  let d;
+  try{d=await api('/api/tasks')}catch(e){d={tasks:{}}}
+  const tasks=d.tasks||{};
+  const list=Object.entries(tasks).map(([id,t])=>({id,...t}));  // 带 id，重跑要用
+  // 运行锁：有任何 active 任务(queued/submitting/running/poll_timeout) → 锁住提交按钮
+  const anyActive=Object.values(tasks).some(t=>ACTIVE_STATES.includes(t.status));
+  SUBMIT_LOCK=anyActive;
+  updateRunBtn();
+  // 渲染 Tab 栏（全部 + 各脚本，带数量）
+  const tabsBox=$('taskTabs');
+  const groups={};
+  Object.entries(tasks).forEach(([id,t])=>{
+    const k=t.script||'unknown';
+    if(!groups[k])groups[k]=[];
+    groups[k].push({id,...t});
+  });
+  // 按注册顺序排 Tab
+  const scriptOrder=Object.keys(SCRIPTS);
+  const tabKeys=['all',...scriptOrder.filter(k=>groups[k]),...Object.keys(groups).filter(k=>!scriptOrder.includes(k))];
+  tabsBox.innerHTML=tabKeys.map(k=>{
+    const n=k==='all'?list.length:(groups[k]||[]).length;
+    const label=k==='all'?'全部':((SCRIPTS[k]&&SCRIPTS[k].name.split(' ')[0])||k);
+    return `<button class="tab${TASK_TAB===k?' active':''}" onclick="TASK_TAB='${k}';refreshTasks()">${label}<span class="cnt">${n}</span></button>`;
+  }).join('');
+  // 选中的 Tab 任务
+  const box=$('drawerTasks');
+  box.innerHTML='';
+  const arr = TASK_TAB==='all' ? list : (groups[TASK_TAB]||[]);
+  const show = [...arr].reverse();  // 新在上
+  if(!show.length){box.innerHTML='<div class="hint">暂无任务</div>';return}
+  show.forEach(t=>{
+    const div=document.createElement('div');
+    div.className='tk';
+    div.title='点击查看大图';
+    const st=t.status||'queued';
+    const isVideo=!!t.image && /\.(mp4|webm|mov)$/i.test(t.image);
+    const hasMedia=!!t.image;
+    // 缩略图主体
+    let body='';
+    if(isVideo){
+      body=`<video src="${mediaUrl(t.image)}" preload="metadata" muted playsinline></video>
+        <div class="play">▶</div>`;
+    }else if(hasMedia){
+      body=`<img src="${mediaUrl(t.image)}" loading="lazy">`;
+    }else{
+      const prompt=(t.params&&t.params.prompt||'').slice(0,60);
+      body=`<div class="nothumb"><div style="font-size:10px;opacity:.7">${st==='error'?'⚠ 失败':(st==='done'?'✅ 完成':(st==='poll_timeout'?'🕐 排队超时':'⏳ '+st))}</div>
+        <div class="prompt">${prompt||'（无提示词）'}</div>${t.error?`<div style="font-size:9px;color:var(--err);word-break:break-all">${t.error.slice(0,40)}</div>`:''}</div>`;
+    }
+    // 底部状态条
+    const tm=new Date(t.ts*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    const bar=`<div class="tkbar">
+      <span class="st ${st}">${st==='done'?'✓':st==='error'?'✗':st==='submitting'?'提交中':(st==='poll_timeout'?'排队超时':st)}</span>
+      <span class="tm">${tm}</span>
+    </div>`;
+    div.innerHTML=body+bar;
+    div.onclick=()=>{ if(_supClick){_supClick=false;return;} openPreview(t); };
+    div.oncontextmenu=(e)=>{e.preventDefault();e.stopPropagation();showTaskMenu(t,{clientX:e.clientX,clientY:e.clientY});};
+    // 移动端长按（≥550ms）→ 菜单；滑动/松开取消，抑制随后的 click
+    div.addEventListener('touchstart',(e)=>{
+      const tx=e.touches[0].clientX, ty=e.touches[0].clientY;
+      const card=t;
+      clearTimeout(_lpT);
+      _lpT=setTimeout(()=>{
+        if(e.cancelable)e.preventDefault();
+        _supClick=true;
+        showTaskMenu(card,{clientX:tx,clientY:ty});
+      },550);
+    },{passive:false});
+    div.addEventListener('touchend',()=>clearTimeout(_lpT));
+    div.addEventListener('touchmove',()=>clearTimeout(_lpT));
+    box.appendChild(div);
+  });
+}
+
+// 大图预览
+function openPreview(t){
+  $('pvMedia').innerHTML = t.image ? renderMedia(t.image) : '<div style="padding:30px;color:var(--dim)">无输出</div>';
+  const info=[];
+  if(t.params){
+    const p=t.params;
+    if(p.prompt)info.push(`提示词：${p.prompt}`);
+    const kv=Object.entries(p).filter(([k])=>!['prompt','ref_image'].includes(k)&&p[k]!=='');
+    if(kv.length)info.push('参数：'+kv.map(([k,v])=>`${k}=${v}`).join(' · '));
+  }
+  if(t.pid)info.push(`prompt_id: ${t.pid}`);
+  if(t.cost&&t.cost.cost_time)info.push(`⏱ ${t.cost.cost_time}s · ${t.cost.coins}币`);
+  if(t.error)info.push(`错误：${t.error}`);
+  $('pvInfo').innerHTML=info.join('<br>')||'';
+  $('previewMask').style.display='block';
+  $('previewBox').style.display='block';
+}
+function closePreview(){
+  $('previewMask').style.display='none';
+  $('previewBox').style.display='none';
+  const v=$('pvMedia').querySelector('video');if(v)v.pause();
+}
+
+// ===== 任务长按菜单 =====
+let MENU_TASK=null;
+let _lpT=null;       // 长按计时器
+let _supClick=false; // 长按后抑制一次 click（避免误开预览）
+function showTaskMenu(t,e){
+  MENU_TASK=t;
+  const m=$('taskMenu');
+  m.style.display='block';
+  const r=m.getBoundingClientRect();
+  let x=(e.clientX||0), y=(e.clientY||0);
+  if(x+r.width>innerWidth)x=innerWidth-r.width-8;
+  if(y+r.height>innerHeight)y=innerHeight-r.height-8;
+  m.style.left=Math.max(4,x)+'px';
+  m.style.top=Math.max(4,y)+'px';
+}
+function hideTaskMenu(){const m=$('taskMenu');if(m)m.style.display='none';MENU_TASK=null;}
+document.addEventListener('click',()=>hideTaskMenu());
+function inspectTask(t){
+  if(!t||!t.id){toast('任务无效');return}
+  toast('🔍 错误查询中…');
+  const label=document.createElement('div');
+  label.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:300;background:#15233a;color:#9dc4ff;border:1px solid #2c4a75;border-radius:8px;padding:6px 14px;font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.4)';
+  label.textContent='🔍 查询远端任务状态…';
+  document.body.appendChild(label);
+  setTimeout(()=>label.remove(),2000);
+  api('/api/task/inspect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:t.id})})
+    .then(r=>{
+      if(r.ok){
+        if(r.action==='pulled'||r.action==='claimed_pulled')toast('✅ '+r.msg);
+        else if(r.action==='resumed'||r.action==='claimed_resumed')toast('⏳ '+r.msg);
+        else if(r.action==='resubmitted')toast('↻ '+r.msg);
+        else if(r.action==='remote_error')toast('❌ '+r.msg);
+        else toast(r.msg||'查询完成');
+      }else toast('查询失败: '+(r.error||'未知'));
+      refreshTasks();
+    })
+    .catch(e=>{toast('错误查询失败: 后端未连接');refreshTasks();});
+}
+function exportTask(t){
+  if(!t||!t.id){toast('任务无效');return}
+  toast('💾 导出中…');
+  api('/api/task/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:t.id})})
+    .then(r=>{
+      if(r.ok)toast('✅ 已保存到相册/公共目录: '+(r.exported||[]).join(', '));
+      else toast('导出失败: '+(r.error||'未知'));
+    })
+    .catch(e=>toast('导出失败: 后端未连接'));
+}
+
+// 重跑：用任务原 script+params 再提交一次（先弹窗确认防误触）
+let RERUN_ID=null;
+async function rerunTask(id){
+  let d;
+  try{d=await api('/api/tasks')}catch(e){d={tasks:{}}}
+  const t=(d.tasks||{})[id];
+  if(!t){toast('任务不存在');return}
+  const script=t.script;
+  if(!SCRIPTS[script]){toast('脚本不可用: '+script);return}
+  RERUN_ID=id;
+  const p=t.params||{};
+  const lines=[];
+  lines.push(`<b>脚本</b>：${(SCRIPTS[script]&&SCRIPTS[script].name)||script}`);
+  if(p.prompt)lines.push(`<b>提示词</b>：${p.prompt.slice(0,120)}${p.prompt.length>120?'…':''}`);
+  const kv=Object.entries(p).filter(([k])=>!['prompt','ref_image'].includes(k)&&p[k]!=='');
+  if(kv.length)lines.push(`<b>参数</b>：${kv.map(([k,v])=>`${k}=${v}`).join(' · ')}`);
+  if(t.cost&&t.cost.coins)lines.push(`<b>上次花费</b>：约 ${t.cost.coins} 币`);
+  lines.push('<span style="color:var(--err)">⚠ 重跑会消耗 RunningHub 点数，确认继续？</span>');
+  $('rerunInfo').innerHTML=lines.join('<br>');
+  $('rerunMask').style.display='block';
+  $('rerunBox').style.display='block';
+}
+function closeRerun(){
+  $('rerunMask').style.display='none';
+  $('rerunBox').style.display='none';
+  RERUN_ID=null;
+}
+async function doRerun(){
+  const id=RERUN_ID;
+  closeRerun();
+  if(!id)return;
+  let d;
+  try{d=await api('/api/tasks')}catch(e){d={tasks:{}}}
+  const t=(d.tasks||{})[id];
+  if(!t){toast('任务不存在');return}
+  const script=t.script;
+  const params=t.params||{};
+  try{
+    const r=await api('/api/submit',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({script,params})});
+    if(r.task_id){toast('已重新提交 '+r.task_id);refreshTasks()}else toast('重跑失败: '+(r.error||''))
+  }catch(e){toast('重跑失败: 后端未连接')}
+}
+
+// 删除任务：先弹窗确认防误触
+let DEL_ID=null;
+async function delTask(id){
+  let d;
+  try{d=await api('/api/tasks')}catch(e){d={tasks:{}}}
+  const t=(d.tasks||{})[id];
+  if(!t){toast('任务不存在');return}
+  DEL_ID=id;
+  const p=t.params||{};
+  const lines=[];
+  lines.push(`<b>任务</b>：${id}`);
+  lines.push(`<b>脚本</b>：${(SCRIPTS[t.script]&&SCRIPTS[t.script].name)||t.script}`);
+  if(p.prompt)lines.push(`<b>提示词</b>：${p.prompt.slice(0,100)}${p.prompt.length>100?'…':''}`);
+  lines.push(`<b>状态</b>：${t.status==='done'?'✅ 完成':t.status==='error'?'✗ 失败':t.status}`);
+  lines.push('<span style="color:var(--err)">⚠ 删除后不可恢复（仅删除记录，不影响本地文件），确认？</span>');
+  $('delInfo').innerHTML=lines.join('<br>');
+  $('delMask').style.display='block';
+  $('delBox').style.display='block';
+}
+function closeDel(){
+  $('delMask').style.display='none';
+  $('delBox').style.display='none';
+  DEL_ID=null;
+}
+async function doDel(){
+  const id=DEL_ID;
+  closeDel();
+  if(!id)return;
+  try{
+    const r=await api('/api/task/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+    if(r.ok)toast('已删除 '+id);
+    else toast('删除失败: '+(r.error||'未知'));
+  }catch(e){toast('删除失败: 后端未连接')}
+  refreshTasks();
+}
+
+let TASK_TIMER=null;  // 历史任务轮询定时器（抽屉开着才跑，30s）
+
+function toggleDrawer(open){
+  $('drawer').classList.toggle('open',open);
+  $('mask').style.display=open?'block':'none';
+  if(open){
+    refreshTasks();  // 打开立即刷新一次
+    if(!TASK_TIMER) TASK_TIMER=setInterval(refreshTasks,30000);
+  }else{
+    if(TASK_TIMER){clearInterval(TASK_TIMER);TASK_TIMER=null}
+  }
+}
+
+// ===== 设置（RunningHub + LLM）=====
+function switchSetTab(tab){
+  document.querySelectorAll('.settab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+  $('setpanel-rh').style.display=tab==='rh'?'block':'none';
+  $('setpanel-llm').style.display=tab==='llm'?'block':'none';
+  $('setpanel-be').style.display=tab==='be'?'block':'none';
+  if(tab==='be') refreshBackendStatus();
+}
+
+async function loadSettings(){
+  try{
+    const d=await api('/api/settings');
+    // RunningHub
+    const st=$('keyStatus');
+    st.textContent=d.api_key_set?('已配置：'+d.api_key_masked):'未配置密钥——跑图会失败';
+    st.style.color=d.api_key_set?'var(--ok)':'var(--err)';
+    // 余额
+    refreshBalance();
+    // LLM
+    const llm=d.llm||{};
+    const ls=$('llmStatus');
+    const parts=[];
+    if(llm.base_url)parts.push(llm.base_url);
+    if(llm.model)parts.push(llm.model);
+    if(llm.api_key_set)parts.push('Key '+llm.api_key_masked);
+    ls.textContent=parts.length?('已配置：'+parts.join(' · ')):'未配置 LLM——润色按钮不可用';
+    ls.style.color=parts.length?'var(--ok)':'var(--err)';
+    // 回填 LLM 输入框（key 不回填，始终留空重填）
+    $('llmBaseUrl').value=llm.base_url||'';
+    $('llmModel').value=llm.model||'';
+    $('llmStyle').value=llm.style||'natural';
+  }catch(e){
+    $('keyStatus').textContent='后端未连接';
+  }
+}
+
+async function refreshBackendStatus(){
+  const el=$('beStatus');
+  el.textContent='查询中…';
+  el.style.color='var(--dim)';
+  try{
+    const d=await api('/api/backend');
+    if(d.ok){
+      const mode=d.mode==='android'?'📱 App 内嵌':'🖥 本地服务';
+      el.innerHTML=`${mode}\n🟢 运行中 · PID ${d.pid}\n端口 ${d.port} · Python ${d.python}\n启动于 ${d.started}\n任务 ${d.tasks} 条`;
+      el.style.color='var(--ok)';
+    }else{
+      el.textContent='后端异常: '+(d.error||'');
+      el.style.color='var(--err)';
+    }
+  }catch(e){
+    el.textContent='❌ 后端未连接——服务可能未启动';
+    el.style.color='var(--err)';
+  }
+}
+
+async function restartBackend(){
+  const btn=event.target;
+  const old=btn.textContent;
+  btn.disabled=true;
+  btn.textContent='重启中…';
+  try{
+    const d=await api('/api/backend/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    if(d.ok){
+      toast('后端重启中，稍后自动重连…');
+      // 等服务重启后刷新状态
+      setTimeout(refreshBackendStatus, 2500);
+      setTimeout(refreshBackendStatus, 5000);
+      setTimeout(refreshBackendStatus, 8000);
+    }else{
+      toast('重启失败: '+(d.error||''));
+    }
+  }catch(e){
+    // 重启时连接会断，属正常——稍后自动重连
+    toast('后端正在重启，稍候…');
+    setTimeout(refreshBackendStatus, 2500);
+    setTimeout(refreshBackendStatus, 5000);
+    setTimeout(refreshBackendStatus, 8000);
+  }finally{
+    btn.disabled=false;
+    btn.textContent=old;
+  }
+}
+
+async function refreshBalance(){
+  const el=$('balStatus');
+  el.textContent='查询中…';
+  el.style.color='var(--dim)';
+  try{
+    const d=await api('/api/balance');
+    if(d.ok){
+      const parts=[];
+      if(d.remain_coins!=null)parts.push(`🪙 RH币 <b style="color:var(--acc)">${d.remain_coins}</b>`);
+      if(d.task_counts!=null)parts.push(`任务中 ${d.task_counts}`);
+      if(d.remain_money!=null)parts.push(`余额 ${d.remain_money} ${d.currency||''}`);
+      el.innerHTML=parts.join(' · ')||'查询成功（无数据）';
+      el.style.color='var(--ok)';
+    }else{
+      el.textContent='查询失败: '+(d.error||'');
+      el.style.color='var(--err)';
+    }
+  }catch(e){
+    el.textContent='查询失败: 后端未连接';
+    el.style.color='var(--err)';
+  }
+}
+
+function openSettings(){
+  $('setModal').style.display='block';
+  $('setMask').style.display='block';
+  loadSettings();
+  $('apiKeyInput').value='';
+  $('llmApiKey').value='';
+}
+
+function closeSettings(){
+  $('setModal').style.display='none';
+  $('setMask').style.display='none';
+}
+
+async function saveSettings(){
+  const body={
+    api_key:$('apiKeyInput').value.trim(),
+    llm_base_url:$('llmBaseUrl').value.trim(),
+    llm_model:$('llmModel').value.trim(),
+    llm_api_key:$('llmApiKey').value.trim(),
+    llm_style:$('llmStyle').value,
+  };
+  // RunningHub key 空串不提交（保留已存的，避免误清空）
+  if(!body.api_key) delete body.api_key;
+  // 没填 LLM key 就不提交该字段（保留已存的），其余字段空串=清除
+  if(!body.llm_api_key) delete body.llm_api_key;
+  try{
+    const r=await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)});
+    if(r.ok){
+      toast('设置已保存 ✅');
+      closeSettings();
+      renderKeyBadge();
+    }else toast('保存失败: '+(r.error||''));
+  }catch(e){
+    toast('保存失败: 后端未连接');
+  }
+}
+
+// ===== AI 润色 =====
+function currentKind(){
+  const k=CUR||'';
+  if(k.includes('video'))return 'video';
+  if(k==='krea2_t2i'||k==='zimage_i2i')return 't2i';
+  return 'i2i';
+}
+
+async function polishPrompt(){
+  const ta=$('prompt');
+  const raw=ta.value.trim();
+  if(!raw){toast('先写点东西再润色吧');return}
+  // 备份原文供撤销
+  $('lastRawPrompt').value=raw;
+  const btn=$('polishBtn');
+  btn.disabled=true;
+  const old=btn.textContent;
+  btn.textContent='✨ 润色中…';
+  try{
+    const r=await api('/api/polish',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({prompt:raw,kind:currentKind()})});
+    if(r.ok&&r.polished){
+      ta.value=r.polished;
+      toast('润色完成 ✅（可撤销）');
+    }else toast('润色失败: '+(r.error||''));
+  }catch(e){
+    toast('润色失败: 请检查 LLM 设置');
+  }finally{
+    btn.disabled=false;
+    btn.textContent=old;
+  }
+}
+
+function revertPrompt(){
+  const last=$('lastRawPrompt').value;
+  if(!last){toast('没有可撤销的润色');return}
+  $('prompt').value=last;
+  $('lastRawPrompt').value='';
+  toast('已撤销');
+}
+
+function mediaUrl(path){
+  const name=(path||'').split('/').pop()||'';
+  return (API_BASE||'')+'/images/'+encodeURIComponent(name);
+}
+
+function renderMedia(path){
+  const name=(path||'').split('/').pop()||'';
+  if(/\.(mp4|webm|mov)$/i.test(name)){
+    return `<video src="${mediaUrl(path)}" controls preload="metadata" style="max-width:100%;border-radius:6px;margin-top:8px"></video>`;
+  }
+  return `<img src="${mediaUrl(path)}" style="max-width:100%;border-radius:6px;margin-top:8px">`;
+}
+
+async function clearTasks(){if(!confirm('确定清空全部历史任务？\n（仅清除记录，不删除本地产物文件）'))return;await api('/api/clear',{method:'POST'});refreshTasks()}
+
+// ===== 应用市场 =====
+let MK_PAGE=1, MK_TAG='', MK_KW='', MK_DETAIL=null, MK_SUBMITTING=false;
+
+function toggleMarket(open){
+  $('marketMask').style.display=open?'block':'none';
+  $('marketPanel').style.display=open?'block':'none';
+  if(open){
+    $('marketPanel').style.right='0';
+    if(!MK_DETAIL) loadMarket();
+  }else{
+    $('marketPanel').style.right='-720px';
+  }
+}
+
+async function loadMarket(){
+  const body=$('marketBody');
+  body.innerHTML='加载中…';
+  try{
+    const qs=`page=${MK_PAGE}&size=12`+(MK_TAG?`&tag=${MK_TAG}`:'')+(MK_KW?`&kw=${encodeURIComponent(MK_KW)}`:'');
+    const d=await api('/api/market?'+qs);
+    if(!d.ok){body.innerHTML=`<div class="err">${d.error||'加载失败'}</div>`;return}
+    renderMarketList(d, body);
+  }catch(e){body.innerHTML='<div class="err">后端未连接</div>'}
+}
+
+function renderMarketList(d, body){
+  const recs=d.records||[];
+  const tagsHtml=`<div style="display:flex;gap:4px;flex-wrap:wrap;margin:6px 0 10px">
+    <button class="btn" style="margin:0;padding:3px 8px;font-size:11px;background:${!MK_TAG?'var(--acc)':'#3a3f4b'}" onclick="MK_TAG='';MK_PAGE=1;loadMarket()">全部</button>
+    <button class="btn" style="margin:0;padding:3px 8px;font-size:11px;background:${MK_TAG?'var(--acc)':'#3a3f4b'}" onclick="MK_TAG='${MK_TAG}';loadMarket()">已选</button>
+  </div>`;
+  const kw=`<input id="mkKw" placeholder="搜索应用名…" value="${MK_KW.replace(/"/g,'"')}" style="width:100%;margin:4px 0 8px" onkeydown="if(event.key==='Enter'){MK_KW=this.value;MK_PAGE=1;loadMarket()}">`;
+  let html=kw+`<div class="hint">共 ${d.total||'?'} 个应用 · 第 ${d.current||MK_PAGE}/${d.pages||'?'} 页</div>`;
+  if(!recs.length){html+='<div class="hint">无结果</div>'}
+  recs.forEach(r=>{
+    html+=`<div style="display:flex;gap:10px;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;cursor:pointer;background:#0d0f13" onclick="openMarketDetail('${r.id}')">
+      ${r.cover?`<img src="${r.cover}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;flex-shrink:0">`:'<div style="width:64px;height:64px;background:#222;border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:10px">无图</div>'}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;color:#e8e8e8;font-weight:600;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.name||''}</div>
+        <div style="font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px">${r.intro||''}</div>
+        <div style="font-size:10px;color:var(--dim)">
+          ${(r.tags||[]).map(t=>`<span style="background:#222;padding:1px 6px;border-radius:4px;margin-right:4px">${t}</span>`).join('')}
+          <span>👤 ${r.owner||'?'}</span>
+          <span style="margin-left:6px">🔥 ${r.use_count||'?'} 次</span>
+        </div>
+      </div>
+    </div>`;
+  });
+  html+=`<div style="display:flex;gap:6px;margin-top:10px">
+    <button class="btn" style="margin:0;flex:1" onclick="MK_PAGE=Math.max(1,MK_PAGE-1);loadMarket()">← 上一页</button>
+    <button class="btn" style="margin:0;flex:1" onclick="MK_PAGE+=1;loadMarket()">下一页 →</button>
+  </div>
+  <button class="btn" style="margin:8px 0 0;width:100%;background:#3a3f4b" onclick="MK_DETAIL=null;toggleMarket(false)">关闭</button>`;
+  body.innerHTML=html;
+}
+
+async function openMarketDetail(id){
+  const body=$('marketBody');
+  body.innerHTML='加载中…';
+  try{
+    const d=await api('/api/market/detail?id='+id);
+    if(!d.ok){body.innerHTML=`<div class="err">加载失败: ${d.error||'未知错误'}</div><button class="btn" style="margin-top:8px;width:100%" onclick="openMarketDetail('${id}')">🔄 重试</button>`;return}
+    MK_DETAIL=d.detail;
+    renderMarketDetail(d.detail, body);
+  }catch(e){
+    body.innerHTML=`<div class="err">加载失败: ${e.message==='HTTP 500'?'后端内部错误':(e.name==='AbortError'?'请求超时（RunningHub 外部接口慢）':'后端未连接')}</div><button class="btn" style="margin-top:8px;width:100%" onclick="openMarketDetail('${id}')">🔄 重试</button>`;
+  }
+}
+
+function renderMarketDetail(d, body){
+  let html=`<button class="btn" style="margin:0 0 8px;padding:4px 10px;font-size:11px;background:#3a3f4b" onclick="MK_DETAIL=null;loadMarket()">← 返回列表</button>
+  <div style="font-size:15px;color:#e8e8e8;font-weight:700;margin:4px 0 6px">${d.name||''}</div>
+  <div class="hint">👤 ${d.owner||'?'} · 🔥 ${d.use_count||'?'} 次使用 · 规格 ${d.instance_type||'default'}</div>
+  ${d.desc?`<div style="font-size:11px;color:var(--dim);margin:6px 0 10px;white-space:pre-wrap">${d.desc}</div>`:''}
+  <div style="margin:8px 0 4px;font-size:12px;color:var(--acc)">参数（${(d.nodes||[]).length} 个）</div>`;
+  const nodes=d.nodes||[];
+  nodes.forEach((n,i)=>{
+    if(n.type==='ref'){
+      html+=`<div style="margin-bottom:8px"><div style="font-size:11px;color:var(--dim);margin-bottom:2px">${n.label}${n.help?` — ${n.help}`:''}</div>
+        <div class="refpick-wrap" data-idx="${i}"><div class="refpick" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+          <div class="rp none sel" data-name="" onclick="MKpickRef(this,'${i}')" style="padding:3px 8px;border:1px solid var(--line);border-radius:6px;font-size:11px;cursor:pointer">无</div>
+        </div></div>
+        <input type="hidden" class="mkrefval" data-idx="${i}"></div>`;
+    }else if(n.type==='select'){
+      const opts=(n.options||'').split(',').map(s=>s.trim()).filter(Boolean);
+      let optHtml='';
+      opts.forEach(o=>{
+        const sel=o===n.def?' selected':'';
+        optHtml+=`<option value="${o}"${sel}>${o}</option>`;
+      });
+      html+=`<div style="margin-bottom:8px"><div style="font-size:11px;color:var(--dim);margin-bottom:2px">${n.label}${n.help?` — ${n.help}`:''}</div>
+        <select class="mkval" data-idx="${i}" style="width:100%">${optHtml}</select></div>`;
+    }else{
+      html+=`<div style="margin-bottom:8px"><div style="font-size:11px;color:var(--dim);margin-bottom:2px">${n.label}${n.help?` — ${n.help}`:''}</div>
+        <input class="mkval" data-idx="${i}" value="${(n.def||'').replace(/"/g,'"')}" style="width:100%"></div>`;
+    }
+  });
+  html+=`<div style="margin:10px 0 4px;font-size:12px;color:var(--acc)">提交选项</div>
+  <div style="display:flex;gap:6px;margin-bottom:6px">
+    <input id="mkWebhook" placeholder="Webhook 回调 URL（可选，任务完成自动通知）" style="flex:1">
+    <select id="mkInstance" style="width:120px">
+      <option value="default">24G 显卡</option>
+      <option value="plus">48G 显卡</option>
+    </select>
+  </div>
+  <button class="btn" style="margin:8px 0 0;width:100%" onclick="submitMarketApp()">🚀 提交任务</button>
+  <div id="mkResult" style="margin-top:8px"></div>
+  <button class="btn" style="margin:8px 0 0;width:100%;background:#3a3f4b" onclick="MK_DETAIL=null;loadMarket()">← 返回列表</button>`;
+  body.innerHTML=html;
+  // 渲染 ref 选择器（素材+产物）
+  nodes.forEach((n,i)=>{
+    if(n.type==='ref'){
+      const wrap=document.querySelector(`.refpick-wrap[data-idx="${i}"]`);
+      if(wrap) renderMKRefPick(wrap, i);
+    }
+  });
+}
+
+function renderMKRefPick(wrap, idx){
+  const inp=document.querySelector(`.mkrefval[data-idx="${idx}"]`);
+  const cur=inp?inp.value:'';
+  let html=`<div class="refpick" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+  <div class="rp none${cur?'':' sel'}" onclick="MKpickRef(this,'${idx}')" style="width:52px;height:68px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--dim);border-style:dashed">无</div>`;
+  REF_LIST.forEach(name=>{
+    const sel=name===cur?' sel':'';
+    html+=`<div class="rp${sel}" style="width:52px;height:68px;overflow:hidden;position:relative;flex-shrink:0" onclick="MKpickRef(this,'${idx}')" data-name="${name}">
+      <img src="${(API_BASE||'')+'/refs/'+encodeURIComponent(name)}" style="width:100%;height:100%;object-fit:cover;display:block"><span style="position:absolute;top:1px;right:1px;background:rgba(80,160,100,.85);color:#fff;font-size:8px;padding:0 3px;border-radius:3px">素</span>
+    </div>`;
+  });
+  OUT_LIST.forEach(name=>{
+    const val='out:'+name;
+    const sel=val===cur?' sel':'';
+    html+=`<div class="rp${sel}" style="width:52px;height:68px;overflow:hidden;position:relative;flex-shrink:0" onclick="MKpickRef(this,'${idx}')" data-name="${val}">
+      <img src="${(API_BASE||'')+'/refs/out:'+encodeURIComponent(name)}" style="width:100%;height:100%;object-fit:cover;display:block"><span style="position:absolute;top:1px;right:1px;background:rgba(224,160,60,.9);color:#1a1a1a;font-size:8px;padding:0 3px;border-radius:3px">出</span>
+    </div>`;
+  });
+  html+=`</div>`;
+  wrap.innerHTML=html;
+}
+
+function MKpickRef(el, idx){
+  const name=el.dataset.name||'';
+  const inp=document.querySelector(`.mkrefval[data-idx="${idx}"]`);
+  if(inp) inp.value=name;
+  const wrap=document.querySelector(`.refpick-wrap[data-idx="${idx}"]`);
+  if(wrap) renderMKRefPick(wrap, idx);
+}
+
+async function submitMarketApp(){
+  if(MK_SUBMITTING)return;
+  if(!MK_DETAIL){toast('未加载应用');return}
+  const vals={};
+  document.querySelectorAll('.mkval').forEach(inp=>{
+    const n=MK_DETAIL.nodes[parseInt(inp.dataset.idx)];
+    if(n) vals[n.k]=inp.value.trim();
+  });
+  document.querySelectorAll('.mkrefval').forEach(inp=>{
+    const n=MK_DETAIL.nodes[parseInt(inp.dataset.idx)];
+    if(n && inp.value) vals[n.k]=inp.value;
+  });
+  MK_SUBMITTING=true;
+  const res=$('mkResult');
+  res.innerHTML='<div class="hint">提交中…</div>';
+  try{
+    const r=await api('/api/market/submit',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({webapp_id:MK_DETAIL.id, node_values:vals,
+        webhook:$('mkWebhook').value.trim()||'', instance_type:$('mkInstance').value})});
+    if(r.ok){
+      res.innerHTML=`<div style="font-size:12px;color:var(--ok)">✅ 提交成功！任务ID: ${r.task_id||'?'}</div>
+        ${r.prompt_tips?`<div class="hint" style="font-size:10px;word-break:break-all">${r.prompt_tips}</div>`:''}`;
+      toast('市场任务已提交');
+    }else{
+      res.innerHTML=`<div class="err">提交失败: ${r.error||''}</div>`;
+    }
+  }catch(e){
+    res.innerHTML='<div class="err">提交失败: 后端未连接</div>';
+  }
+  MK_SUBMITTING=false;
+}
+init();
+</script>
+</body>
+</html>
