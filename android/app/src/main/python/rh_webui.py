@@ -588,7 +588,7 @@ REGISTRY = {
     },
     "illustrious_t2i": {
         "name": "Illustrious 二次元文生图 (T2I)",
-        "desc": "WAI-illustrious-SDXL 底模 + 可勾选二次元增强 LoRA（Smooth_Booster / Cunnystyle）。半写实 CG 动漫风",
+        "desc": "WAI-illustrious-SDXL 二次元底模（自带动漫画风）。可选加 Smooth_Booster 画质增强 / Cunnystyle 插画微调。半写实 CG 动漫风",
         "module": "rh_illustrious_api", "mode": "t2i",
         "params": [
             {"k": "resolution", "label": "分辨率", "type": "select", "options": [
@@ -600,8 +600,8 @@ REGISTRY = {
             ], "def": "936x1368"},
             {"k": "steps", "label": "步数", "type": "int", "def": 20},
             {"k": "cfg", "label": "CFG", "type": "float", "def": 2.0, "help": "Illustrious 系建议 2.0 左右"},
-            {"k": "smooth", "label": "画质增强 Smooth_Booster", "type": "lora", "def": True, "def_strength": 0.9, "help": "画质平滑/细节增强（Illustrious 系）"},
-            {"k": "cunnystyle", "label": "二次元风格 Cunnystyle", "type": "lora", "def": True, "def_strength": 0.8, "help": "二次元动漫风格（Illustrious 系）"},
+            {"k": "smooth", "label": "画质增强 Smooth_Booster", "type": "lora", "def": True, "def_strength": 0.9, "help": "画质平滑/细节增强（通用，二次元底模也适用）"},
+            {"k": "cunnystyle", "label": "插画微调 Cunnystyle", "type": "lora", "def": False, "def_strength": 0.8, "help": "平台工作流自带插画风格微调（底模已是二次元，这层可选加味，具体效果待实测）"},
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
         ],
     },
