@@ -675,6 +675,67 @@ def _export_to_public(files):
         return []
 
 
+def _extract_last_frame(video_path, out_path):
+    """抽取视频尾帧存为 out_path（jpg）。环境无关，成功返回 True。
+      1) 本地/Ubuntu → ffmpeg（-sseof 取末尾一帧）
+      2) Android/Chaquopy → Kotlin VideoFrames（MediaMetadataRetriever）
+    """
+    video_path = str(video_path)
+    out_path = str(out_path)
+    if not os.path.exists(video_path):
+        return False
+    # 1) ffmpeg（本地/Ubuntu）
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-sseof", "-0.5", "-i", video_path,
+             "-vframes", "1", "-q:v", "2", out_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
+        if r.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            return True
+    except Exception:
+        pass
+    # 2) Android Kotlin（MediaMetadataRetriever）
+    try:
+        from java import jclass
+        VF = jclass("com.yuccc.runninghub.VideoFrames")
+        if (VF.extractLastFrame(video_path, out_path)
+                and os.path.exists(out_path) and os.path.getsize(out_path) > 0):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _task_lastframe(tid):
+    """抽取某任务的视频尾帧，存入 REFS_DIR。返回 (ok, result_dict)。"""
+    with _lock:
+        t = TASKS.get(tid)
+    if not t:
+        return False, {"error": f"任务不存在: {tid}"}
+    # 收集该任务的视频产物（优先 image，其次 files）
+    cand = []
+    if t.get("image"):
+        cand.append(t["image"])
+    cand += list(t.get("files") or [])
+    vid = None
+    for f in cand:
+        if str(f).lower().endswith((".mp4", ".webm", ".mov", ".mkv", ".avi")):
+            vid = str(f)
+            break
+    if not vid:
+        return False, {"error": "该任务没有视频产物"}
+    src = OUT_DIR / os.path.basename(vid)
+    if not src.exists():
+        return False, {"error": f"视频文件不存在: {os.path.basename(vid)}"}
+    REFS_DIR.mkdir(parents=True, exist_ok=True)
+    out_name = "尾帧_" + Path(os.path.basename(vid)).stem + ".jpg"
+    out_path = REFS_DIR / out_name
+    if not _extract_last_frame(str(src), str(out_path)):
+        return False, {"error": "抽帧失败（ffmpeg / MediaMetadataRetriever 均不可用）"}
+    return True, {"ok": True, "name": out_name, "size": os.path.getsize(out_path)}
+
+
 def _run_task(task_id, script_key, params):
     cfg = REGISTRY[script_key]
     try:
@@ -1468,6 +1529,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, "exported": done})
             except Exception as e:
                 self._send(500, {"error": f"导出失败: {e}"})
+        elif path == "/api/task/lastframe":
+            try:
+                data = json.loads(raw.decode() or "{}")
+                tid = str(data.get("id") or "").strip()
+                ok, res = _task_lastframe(tid)
+                self._send(200 if ok else 400, res)
+            except Exception as e:
+                self._send(500, {"error": f"抽帧失败: {e}"})
         elif path == "/api/task/inspect":
             try:
                 data = json.loads(raw.decode() or "{}")
