@@ -1,31 +1,44 @@
-# RunningHub WebUI
+# RunningHub WebUI - 本地统一跑图台
 
-RunningHub 本地统一跑图台：一个自托管的 Web UI，直连 [RunningHub](https://www.runninghub.ai) API 完成文生图 / 图生图 / 视频生成，任务异步化，出图直显。纯 Python 标准库服务端 + 原生 HTML/JS 前端，零第三方依赖。
+RunningHub WebUI 是一个基于 RunningHub 的本地统一跑图台，支持文生图、图生图、视频生成、AI 润色和任务异步管理。你可以通过 WebUI 快速调用 RunningHub API，在本地完成 AI 绘画与视频生成任务。
+
+[![GitHub stars](https://img.shields.io/github/stars/yuccc7878/runninghub-webui?style=social)](https://github.com/yuccc7878/runninghub-webui)
+[![GitHub release](https://img.shields.io/github/v/release/yuccc7878/runninghub-webui)](https://github.com/yuccc7878/runninghub-webui/releases)
 
 ## 功能特性
 
-- **5 大生成脚本**：Zimage 图生图/文生图、Krea2 文生图、Krea2 图生图、MiniMaxH3 首尾帧视频、MiniMaxH3 全能视频（文生视频/参考图驱动）
-- **任务异步队列**：提交后后台轮询 RunningHub，历史任务可重跑 / 删除
-- **AI 润色**：接入任意 OpenAI 兼容接口，按 t2i / i2i / video 三套分镜规范自动扩写提示词
-- **素材与产物管理**：参考图素材库、生成产物列表、直链预览
-- **密钥动态注入**：API Key 通过 WebUI 设置保存到本地，运行时装进各底层模块，代码零硬编码
+- **文生图**：输入提示词，一键生成图片（Zimage / Krea2 双引擎）
+- **图生图**：上传参考图，生成相似风格作品，保持角色改姿势/背景
+- **视频生成**：支持 RunningHub 视频生成任务（MiniMaxH3 首尾帧 / 全能视频）
+- **AI 润色**：自动优化提示词，按 t2i / i2i / video 三套分镜规范扩写，提升出图质量
+- **异步任务管理**：任务队列、状态查询、断点续跑、结果下载，历史任务可重跑/删除
+- **本地部署**：支持本地运行，API Key 本地保存，代码零硬编码，数据更安全
+- **零第三方依赖**：纯 Python 标准库服务端 + 原生 HTML/JS 前端
 
 ## 快速开始
 
-```bash
-# 1. 启动服务（默认端口 8765）
-python3 scripts/rh_webui.py --port 8765
+### 安装
 
-# 2. 浏览器打开
-http://localhost:8765
+```bash
+git clone https://github.com/yuccc7878/runninghub-webui.git
+cd runninghub-webui
 ```
 
-首次使用点右上角「⚙ 密钥」配置：
+> 零依赖：无需 `pip install`，Python 3.8+ 标准库即可运行。
 
-| 配置项 | 说明 |
-|---|---|
-| RunningHub API Key | 在 runninghub.ai 账号页获取，保存后所有脚本生效 |
-| LLM Base URL / Model / Key（可选） | 任意 OpenAI 兼容接口，用于 AI 润色提示词 |
+### 配置 RunningHub API
+
+启动后在 WebUI 右上角点「⚙ 密钥」，填入 RunningHub API Key（在 [runninghub.ai](https://www.runninghub.ai) 账号页获取）即可，所有生成脚本自动生效。可选配置 OpenAI 兼容的 LLM 接口用于 AI 润色。
+
+### 启动 WebUI
+
+```bash
+python3 scripts/rh_webui.py --port 8765
+```
+
+打开浏览器访问 http://127.0.0.1:8765 即可使用。
+
+> 默认端口 8765，可自定义：`--port 8770`。工作区/移动端（安卓 App）共用同一份代码。
 
 ## 目录结构
 
@@ -35,9 +48,9 @@ http://localhost:8765
 │   ├── rh_zimage_api.py   # Zimage 工作流
 │   ├── rh_krea2_nsfw.py   # Krea2 文生图/图生图
 │   ├── rh_h3_flf_api.py   # MiniMaxH3 首尾帧视频
-│   ├── rh_workflow_api.py # MiniMaxH3 全能视频
-│   └── rh_h3_lora.py      # LoRA 预设表（纯本地）
+│   └── rh_workflow_api.py # MiniMaxH3 全能视频
 ├── webui.html            # 前端页面（单文件）
+├── android/              # 安卓壳（Chaquopy + WebView，CI 自动构建 APK）
 ├── refs/                  # 参考图素材库（运行时生成）
 └── workflows/             # 运行时状态、配置与产物（不入库）
 ```
@@ -52,13 +65,9 @@ http://localhost:8765
 | MiniMaxH3 首尾帧视频 | I2V | 首帧(→尾帧)生成视频，支持续接 |
 | MiniMaxH3 全能视频 | T2V / omni | 文生视频 / 参考图驱动 |
 
-## AI 润色规范
+## Android 客户端
 
-润色接口按脚本类型分三套 system prompt（见 `rh_webui.py` 的 `_POLISH_PROMPTS`）：
-
-- **t2i**：七段固定结构（外貌锚点 → 场景 → 光线 → 动作 → 服装 → 镜头 → 氛围），外貌缺失自动补默认人物锚点
-- **i2i**：只描述修改目标，姿势跟随原图，不引入身份改变元素，短句克制
-- **video**：分镜表格式（`时间段｜画面｜动作｜台词｜音轨`），动作写已完成状态，台词软糯 25 字内
+仓库内置安卓壳工程（Chaquopy 内嵌 Python 后端 + WebView），GitHub Actions 自动构建签名 APK，发布在 [Releases](https://github.com/yuccc7878/runninghub-webui/releases) 页面，手机直接安装使用。
 
 ## 安全说明
 
@@ -69,3 +78,7 @@ http://localhost:8765
 ## 免责声明
 
 本项目用于个人学习与自用研究。请遵守 RunningHub 平台用户协议，合理使用 API 额度。
+
+---
+
+**关键词**：RunningHub、runninghub-webui、本地跑图台、文生图、图生图、视频生成、AI 润色、异步任务、WebUI、AIGC、AI 绘画
