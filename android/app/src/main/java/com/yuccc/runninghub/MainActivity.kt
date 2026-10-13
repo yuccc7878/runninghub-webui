@@ -1,12 +1,17 @@
 package com.yuccc.runninghub
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -24,6 +29,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var progress: ProgressBar
     private val handler = Handler(Looper.getMainLooper())
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var fileChooserIntent: Intent? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,6 +78,27 @@ class MainActivity : AppCompatActivity() {
         ws.mediaPlaybackRequiresUserGesture = false
         ws.cacheMode = WebSettings.LOAD_NO_CACHE
         webView.webViewClient = WebViewClient()
+        // 关键：让 <input type="file"> 能弹出系统文件选择器（上传参考图用）
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                webView: WebView,
+                filePathCallback: ValueCallback<Array<Uri>>,
+                fileChooserParams: FileChooserParams
+            ): Boolean {
+                // 若已有回调未消费，先取消旧的（避免泄漏/重复弹窗）
+                this@MainActivity.filePathCallback?.onReceiveValue(null)
+                this@MainActivity.filePathCallback = filePathCallback
+                try {
+                    val intent = fileChooserParams.createIntent()
+                    this@MainActivity.fileChooserIntent = intent
+                    startActivityForResult(intent, REQ_FILE_CHOOSER)
+                } catch (e: Exception) {
+                    this@MainActivity.filePathCallback = null
+                    return false
+                }
+                return true
+            }
+        }
     }
 
     private fun startPythonServer() {
@@ -142,6 +170,10 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    companion object {
+        private const val REQ_FILE_CHOOSER = 0x1001
+    }
+
     override fun onBackPressed() {
         if (webView.canGoBack()) {
             webView.goBack()
@@ -150,7 +182,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_FILE_CHOOSER) {
+            val cb = filePathCallback
+            filePathCallback = null
+            fileChooserIntent = null
+            cb?.onReceiveValue(
+                if (resultCode == Activity.RESULT_OK && data != null) {
+                    if (data.clipData != null) {  // 多选
+                        Array(data.clipData!!.itemCount) { i -> data.clipData!!.getItemAt(i).uri }
+                    } else {
+                        data.data?.let { arrayOf(it) } ?: arrayOf()
+                    }
+                } else {
+                    null  // 用户取消 → 通知 WebView
+                }
+            )
+        }
+    }
+
     override fun onDestroy() {
+        // 释放未完成的文件选择回调，避免 WebView 泄漏
+        filePathCallback?.onReceiveValue(null)
+        filePathCallback = null
         webView.destroy()
         super.onDestroy()
     }
