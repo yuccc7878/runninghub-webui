@@ -4,7 +4,7 @@
 
 import json, os, sys, time, threading, traceback, importlib, re
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 from pathlib import Path
 
 # BASE 三路自适应（单源维护）：
@@ -328,6 +328,58 @@ def _restart_backend():
     # 标记需要重启，由 do_POST 返回前触发（避免重启后响应丢失）
     _RESTART_FLAG[0] = True
     return {"ok": True, "msg": "后端即将重启，页面会自动重连"}
+
+
+# ============================================================
+# 更新检测（v0.5.0）：GitHub 最新 Release vs 当前版本
+# 免 API 方案：latest 重定向 → 解析 tag，绕开 GitHub API 限流(60次/h)
+# ============================================================
+CUR_VERSION = "0.5.0"          # 当前版本号（build.gradle versionName）
+_UPDATE_CACHE = {"ts": 0, "data": None}   # 15 分钟缓存，避免频繁打外网
+
+def _version_tuple(v):
+    """'0.4.9.1' → (0,4,9,1)；'v0.5.0-alpha' 之类取数字段。解析失败返回 (0,)。"""
+    import re as _re
+    m = _re.findall(r"\d+", str(v))
+    return tuple(int(x) for x in m[:4]) or (0,)
+
+def _update_check(force=False):
+    """查 GitHub 最新 Release。返回 {"ok":True,"update":bool,"current":...,"latest":...,"url":...,"notes":...}"""
+    now = time.time()
+    if not force and _UPDATE_CACHE["data"] and now - _UPDATE_CACHE["ts"] < 900:
+        return _UPDATE_CACHE["data"]
+    try:
+        import urllib.request
+        import urllib.error
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            """禁跟随重定向，捕获 302 拿 Location 里的版本号"""
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        opener = urllib.request.build_opener(_NoRedirect())
+        req = urllib.request.Request("https://github.com/yuccc7878/runninghub-webui/releases/latest",
+                                     method="HEAD", headers={"User-Agent": "runninghub-webui/"+CUR_VERSION})
+        loc = ""
+        try:
+            opener.open(req, timeout=10)
+        except urllib.error.HTTPError as e:
+            # 302/301 → Location: /yuccc7878/runninghub-webui/releases/tag/v0.4.9.1
+            if e.code in (301, 302, 303, 307, 308):
+                loc = e.headers.get("Location") or ""
+        if not loc:
+            return {"ok": False, "error": "获取最新版本失败(无重定向)", "current": CUR_VERSION}
+        latest = (loc.rsplit("/", 1)[-1] or "").lstrip("v")   # 版本号段
+        cur = CUR_VERSION.lstrip("v")
+        is_new = _version_tuple(latest) > _version_tuple(cur)
+        data = {"ok": True, "update": is_new, "current": CUR_VERSION,
+                "latest": latest,
+                "url": "https://github.com/yuccc7878/runninghub-webui/releases/latest",
+                "notes": ""}
+        _UPDATE_CACHE["ts"], _UPDATE_CACHE["data"] = now, data
+        return data
+    except Exception as e:
+        return {"ok": False, "error": str(e), "current": CUR_VERSION}
 
 
 START_TIME = time.time()
@@ -791,7 +843,6 @@ def _run_task(task_id, script_key, params):
                 with _lock:
                     TASKS[task_id].update({"status": "done", "image": videos[0] if videos else None,
                                            "files": videos, "pid": res.get("prompt_id"), "error": None})
-                _export_to_public(videos)
             else:
                 ref_image = params.get("ref_image") or ""
                 ref_paths = None
@@ -818,7 +869,6 @@ def _run_task(task_id, script_key, params):
                 with _lock:
                     TASKS[task_id].update({"status": "done", "image": _img,
                                            "files": saved, "pid": res.get("prompt_id"), "error": None})
-                _export_to_public(saved)
             _save_state()
             return
 
@@ -864,7 +914,6 @@ def _run_task(task_id, script_key, params):
                     "status": "done", "image": saved[0] if saved else None,
                     "files": saved, "pid": res.get("prompt_id"), "error": None,
                 })
-            _export_to_public(saved)
             _save_state()
             return
         if script_key == "illustrious_t2i":
@@ -912,7 +961,6 @@ def _run_task(task_id, script_key, params):
                     "status": "done", "image": saved[0] if saved else None,
                     "files": saved, "pid": str(res.get("task_id")), "error": None,
                 })
-            _export_to_public(saved)
             _save_state()
             return
         else:
@@ -995,7 +1043,6 @@ def _run_task(task_id, script_key, params):
                     "status": "done", "image": saved[0] if saved else None,
                     "files": saved, "cost": costs[0] if costs else {}, "error": None,
                 })
-            _export_to_public([os.path.basename(p) for p in saved])
             _save_state()
             return
 
@@ -1088,7 +1135,6 @@ def _download_from_entry(task_id, mod, entry, pid):
         TASKS[task_id].update({"status": "done", "image": saved[0] if saved else None,
                                "files": saved, "pid": pid, "error": None})
     _save_state()
-    _export_to_public(saved)
     return saved
 
 
@@ -1342,13 +1388,34 @@ class Handler(BaseHTTPRequestHandler):
             })
         elif path == "/api/backend":
             self._send(200, _backend_status())
+        elif path == "/api/update_check":
+            q = parse_qs(u.query)
+            force = (q.get("force") or ["0"])[0] == "1"
+            self._send(200, _update_check(force=force))
         elif path == "/api/tasks":
             with _lock:
                 t = {k: {kk: vv for kk, vv in v.items() if kk != "trace"} for k, v in TASKS.items()}
             self._send(200, {"tasks": t})
+        elif path == "/api/latest_image":
+            # 最近一张完成的出图（status=done 且 ts 最新，文件必须真实落盘）
+            with _lock:
+                best_name, best_ts = None, -1
+                for _t in TASKS.values():
+                    if _t.get("status") != "done" or not _t.get("image"):
+                        continue
+                    nm = os.path.basename(str(_t["image"]))
+                    if not (OUT_DIR / nm).exists():
+                        continue
+                    ts = _t.get("ts") or 0
+                    if ts > best_ts:
+                        best_ts, best_name = ts, nm
+            if best_name:
+                self._send(200, {"ok": True, "name": best_name})
+            else:
+                self._send(200, {"ok": True, "name": None})
         elif path.startswith("/refs/"):
             # refs: 素材 / refs/out: 产物 均可访问
-            raw = path[len("/refs/"):]
+            raw = unquote(path[len("/refs/"):])
             if raw.startswith("out:"):
                 name = os.path.basename(raw[4:])
                 fp = OUT_DIR / name
@@ -1363,7 +1430,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             return self._send_file(fp)
         elif path.startswith("/images/"):
-            name = os.path.basename(path)
+            name = os.path.basename(unquote(path))
             fp = OUT_DIR / name
             if not fp.exists():
                 self._send(404, {"error": "not found"})
