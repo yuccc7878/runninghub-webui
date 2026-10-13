@@ -502,6 +502,7 @@ REGISTRY = {
                 {"v": "flowdpo", "label": "flowdpo · 真实感光影（治扁平/过曝/塑料感）"},
                 {"v": "model", "label": "model · 全能模特展示（强度0.45/步数10）"},
                 {"v": "peach", "label": "peach · 蜜桃臀加强（⚠会改脸型，仅限不露脸构图）"},
+                {"v": "zanime", "label": "zanime · 二次元动漫化（真人转二次元，选图生图用）"},
             ], "def": "none"},
             {"k": "lora_strength", "label": "LoRA强度", "type": "float", "def": 0.7, "help": "仅 LoRA≠无 时生效"},
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
@@ -582,6 +583,25 @@ REGISTRY = {
             {"k": "steps", "label": "步数", "type": "int", "def": 8},
             {"k": "lora", "label": "LoRA", "type": "select", "options": [{"v": "none", "label": "无"}, {"v": "synthpussy", "label": "synthpussy（阴部细节加强，实测✓）"}, {"v": "realface", "label": "realface（人物真实质感，触发词 r34l1sm）"}, {"v": "cinematic", "label": "cinematic（电影级质感，触发词 DY）"}, {"v": "physics", "label": "physics（物理运动，不稳定）"}, {"v": "nokia", "label": "nokia（诺基亚复古低清，触发词 nokiastyle）"}], "def": "none"},
             {"k": "lora_strength", "label": "LoRA强度", "type": "float", "def": 0.9, "help": "仅 LoRA≠none 时生效", "group": "advanced"},
+            {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
+        ],
+    },
+    "illustrious_t2i": {
+        "name": "Illustrious 二次元文生图 (T2I)",
+        "desc": "WAI-illustrious-SDXL 底模 + 可勾选二次元增强 LoRA（Smooth_Booster / Cunnystyle）。半写实 CG 动漫风",
+        "module": "rh_illustrious_api", "mode": "t2i",
+        "params": [
+            {"k": "resolution", "label": "分辨率", "type": "select", "options": [
+                {"v": "936x1368", "label": "936×1368（竖屏 9:16 · 推荐）"},
+                {"v": "768x1344", "label": "768×1344（竖屏 9:16 · 低清）"},
+                {"v": "1080x1920", "label": "1080×1920（竖屏 9:16 · 高清，更贵）"},
+                {"v": "1216x832", "label": "1216×832（横屏 16:9）"},
+                {"v": "1024x1024", "label": "1024×1024（方形 1:1）"},
+            ], "def": "936x1368"},
+            {"k": "steps", "label": "步数", "type": "int", "def": 20},
+            {"k": "cfg", "label": "CFG", "type": "float", "def": 2.0, "help": "Illustrious 系建议 2.0 左右"},
+            {"k": "smooth", "label": "画质增强 Smooth_Booster", "type": "lora", "def": True, "def_strength": 0.9, "help": "画质平滑/细节增强（Illustrious 系）"},
+            {"k": "cunnystyle", "label": "二次元风格 Cunnystyle", "type": "lora", "def": True, "def_strength": 0.8, "help": "二次元动漫风格（Illustrious 系）"},
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
         ],
     },
@@ -782,6 +802,54 @@ def _run_task(task_id, script_key, params):
                 TASKS[task_id].update({
                     "status": "done", "image": saved[0] if saved else None,
                     "files": saved, "pid": res.get("prompt_id"), "error": None,
+                })
+            _export_to_public(saved)
+            _save_state()
+            return
+        if script_key == "illustrious_t2i":
+            # Illustrious 二次元文生图（rh_illustrious_api，走 ai-app/run 通道）
+            seed_s = str(params.get("seed") or "").strip()
+            try:
+                seed = int(seed_s) if seed_s else None
+            except ValueError:
+                seed = None
+            def _chk(v, d=True):
+                if v is None:
+                    return d
+                if isinstance(v, bool):
+                    return v
+                return str(v).strip().lower() in ("1", "true", "yes", "on")
+            use_smooth = _chk(params.get("smooth"), True)
+            use_cunnystyle = _chk(params.get("cunnystyle"), True)
+            res_s = str(params.get("resolution") or "").strip().lower()
+            _w = _h = None
+            if res_s and "x" in res_s:
+                try:
+                    _w, _h = (int(x) for x in res_s.split("x")[:2])
+                except ValueError:
+                    _w = _h = None
+            width = _w or 936
+            height = _h or 1368
+            with _lock:
+                TASKS[task_id]["status"] = "submitting"
+            res = mod.run(
+                prompt_text=prompt,
+                width=width,
+                height=height,
+                steps=int(params.get("steps", 20)),
+                cfg=float(params.get("cfg", 2.0)),
+                use_smooth_booster=use_smooth,
+                smooth_strength=float(params.get("smooth_strength", 0.9)) if use_smooth else None,
+                use_cunnystyle=use_cunnystyle,
+                cunnystyle_strength=float(params.get("cunnystyle_strength", 0.8)) if use_cunnystyle else None,
+                download_dir=str(OUT_DIR),
+                on_submit=_on_submit,
+            )
+            saved = [os.path.basename(p) for p in (res.get("saved") or [])]
+            with _lock:
+                TASKS[task_id].update({
+                    "status": "done", "image": saved[0] if saved else None,
+                    "files": saved, "pid": str(res.get("task_id")), "error": None,
                 })
             _export_to_public(saved)
             _save_state()

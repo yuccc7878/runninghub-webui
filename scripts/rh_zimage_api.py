@@ -140,6 +140,13 @@ KNOWN_LORAS = {
         "desc": "风情万种人像，官方权重 0.8-1.2。CLI 默认（用户偏好）。"
                 "细节/锐度三版最高；⚠️ 欧美网红骨相 + 重影调，降强度会掉细节",
     },
+    # 二次元动画 LoRA（2026-10-14 从平台市场挖到，Z-image 同架构可挂）
+    "zanime": {     # Z-Anime04 - PiPi-Z-image Controlnet 转动漫工作流
+        "file": "Z-Anime04.safetensors",
+        "default_strength": 1.0,
+        "desc": "二次元动漫风格化（Z-Anime04，来自 PiPi-Z-image 转动漫工作流）。"
+                "Z-image-turbo 同架构，转动漫/动漫感出图。未实测强度，建议 0.7-1.0",
+    },
 }
 
 
