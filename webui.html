@@ -76,6 +76,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 #taskMenu .tm-item.tm-insp:hover{background:rgba(90,150,255,.25);color:#9dc4ff}
 #taskMenu .tm-item.tm-exp:hover{background:rgba(60,190,120,.25);color:#8ff0be}
 #taskMenu .tm-item.tm-rerun:hover{background:rgba(224,160,60,.25);color:#ffd28a}
+#taskMenu .tm-item.tm-reuse:hover{background:rgba(120,140,255,.25);color:#b8c6ff}
 #drawerTasks .tk .nothumb{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:8px;text-align:center;color:var(--dim);font-size:10px;gap:4px}
 #drawerTasks .tk .nothumb .prompt{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;word-break:break-all}
 /* ===== 大图预览弹层 ===== */
@@ -235,9 +236,10 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 
 <!-- 任务长按菜单 -->
 <div id="taskMenu">
+  <div class="tm-item tm-reuse" onclick="var _t=MENU_TASK;hideTaskMenu();reuseTask(_t?._id||_t?.id)">📋 复用提示词</div>
   <div class="tm-item tm-insp" onclick="var _t=MENU_TASK;hideTaskMenu();inspectTask(_t)">🔍 错误查询</div>
   <div class="tm-item tm-exp" onclick="var _t=MENU_TASK;hideTaskMenu();exportTask(_t)">💾 保存到相册</div>
-  <div class="tm-item tm-rerun" onclick="var _t=MENU_TASK;hideTaskMenu();rerunTask(_t?._id||_t?.id)">↻ 再次提交</div>
+  <div class="tm-item tm-rerun" onclick="var _t=MENU_TASK;hideTaskMenu();rerunTask(_t?._id||_t?.id)">↻ 原样重跑</div>
   <div class="tm-item tm-del" onclick="var _t=MENU_TASK;hideTaskMenu();delTask(_t?._id||_t?.id)">🗑 删除</div>
 </div>
 
@@ -764,6 +766,64 @@ function exportTask(t){
       else toast('导出失败: '+(r.error||'未知'));
     })
     .catch(e=>toast('导出失败: 后端未连接'));
+}
+
+// 复用提示词：把历史任务的 script+prompt+params 回填到表单，用户改完手动提交（不消耗点数）
+async function reuseTask(id){
+  let d;
+  try{d=await api('/api/tasks')}catch(e){d={tasks:{}}}
+  const t=(d.tasks||{})[id];
+  if(!t){toast('任务不存在');return}
+  const script=t.script;
+  if(!SCRIPTS[script]){toast('脚本不可用: '+script);return}
+  const p=t.params||{};
+
+  // 1) 切换到对应脚本（会重建参数表单，用默认值）
+  selectScript(script);
+  await new Promise(r=>setTimeout(r,0));  // 等表单渲染
+
+  // 2) 填提示词
+  if($('prompt'))$('prompt').value=p.prompt||'';
+
+  // 3) 回填参数控件
+  const v=SCRIPTS[script];
+  v.params.forEach(pp=>{
+    const el=$('p_'+pp.k);
+    if(!el)return;
+    const val=p[pp.k];
+    if(val===undefined||val===null)return;
+    if(pp.type==='lora'){
+      // 勾选状态 + 强度
+      const on=String(val).toLowerCase()==='true'||val===true||val==='1';
+      el.checked=on;
+      const se=$('p_'+pp.k+'_strength');
+      const sv=p[pp.k+'_strength'];
+      if(se&&sv!==undefined&&sv!==null&&sv!=='')se.value=sv;
+    }else if(pp.type==='checkbox'){
+      el.checked=String(val).toLowerCase()==='true'||val===true||val==='1';
+    }else if(pp.type==='ref'){
+      // 参考图：同步隐藏字段 + 高亮
+      el.value=val;
+      const wrap=el.closest('.refpick-wrap');
+      if(wrap)renderRefPick(wrap);
+    }else{
+      el.value=val;
+    }
+  });
+
+  // 4) 参考图特殊处理：krea2/zimage 的 ref_image 存 CUR_REF（全局）
+  if(p.ref_image!==undefined&&p.ref_image!==''){
+    CUR_REF=p.ref_image;
+    renderRefGrid();
+    document.querySelectorAll('.rp').forEach(rp=>rp.classList.toggle('sel',rp.dataset.name===CUR_REF));
+  }else{
+    CUR_REF='';
+  }
+
+  // 5) 滚动到表单 + 提示
+  const form=document.querySelector('#params');
+  if(form)form.scrollIntoView({behavior:'smooth',block:'center'});
+  toast('✅ 已复用提示词，可修改后手动提交');
 }
 
 // 重跑：用任务原 script+params 再提交一次（先弹窗确认防误触）
