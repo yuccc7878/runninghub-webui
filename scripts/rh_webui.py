@@ -107,7 +107,8 @@ def _market_list(page=1, size=12, tag=None, keyword=None, sort=None):
     if sort:
         body["sort"] = sort
     if keyword:
-        body.setdefault("extra", {})["keyword"] = keyword
+        # RunningHub /api/webapp/list 的搜索字段名是 search（实测 extra.keyword 等均无效）
+        body["search"] = keyword
     r = _rh_web("POST", "/api/webapp/list", body, timeout=20)
     if not r["ok"]:
         return r
@@ -396,7 +397,11 @@ def _inject_api_key(mod):
 
 
 def _load_state():
-    """启动时从 webui_state.json 恢复历史任务（跨重启保留）"""
+    """启动时从 webui_state.json 恢复历史任务（跨重启保留）。
+
+    必须在 BASE 指向运行时目录后再调用：安卓下 serve.py 会覆盖 rh_webui.BASE，
+    若在模块级就调用，会读到 AssetFinder/workflows（不存在）导致历史丢失。
+    """
     try:
         f = BASE / "workflows" / "webui_state.json"
         if not f.exists():
@@ -412,8 +417,6 @@ def _load_state():
     except Exception:
         pass
 
-
-_load_state()
 
 REGISTRY = {
     "zimage_i2i": {
@@ -1063,4 +1066,5 @@ if __name__ == "__main__":
     a = ap.parse_args()
     print(f"洛宝跑图台: http://localhost:{a.port}")
     print(f"  refs: {REFS_DIR} | 输出: {OUT_DIR}")
+    _load_state()  # BASE 已确定，恢复历史任务
     ThreadingHTTPServer(("0.0.0.0", a.port), Handler).serve_forever()

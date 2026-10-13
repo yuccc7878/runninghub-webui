@@ -36,6 +36,9 @@ def start(root: str):
     # 已由 Chaquopy 自动加入 sys.path，无需再手动插入
     rh_webui.SCRIPTS_DIR = Path(rh_webui.__file__).resolve().parent
 
+    # BASE 已指向 filesDir，此时恢复历史任务（模块级不会调用，否则读到 AssetFinder/workflows）
+    rh_webui._load_state()
+
     def _serve():
         from http.server import ThreadingHTTPServer
         try:
