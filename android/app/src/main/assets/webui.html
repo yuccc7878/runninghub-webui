@@ -301,6 +301,13 @@ async function api(url,opt){
   }catch(e){
     if(!API_BASE){
       API_BASE='http://127.0.0.1:__API_PORT__';
+      // 占位符未被后端替换 → 说明是直开 webui.html（file://），自动探测常用端口
+      if(API_BASE.includes('__API_PORT__')){
+        for(const p of [8770, 8765]){
+          try{return await tryFetch('http://127.0.0.1:'+p)}catch(e2){}
+        }
+        API_BASE='';throw e;
+      }
       // 后端可能还在初始化（app 冷启动）：失败后短延迟重试最多 5 次
       for(let i=0;i<5;i++){
         try{return await tryFetch(API_BASE)}catch(e2){await new Promise(r=>setTimeout(r,1500*(i+1)))}
@@ -537,7 +544,7 @@ async function uploadRef(){
     r=await fetch((API_BASE||'')+'/api/upload',{method:'POST',body:fd});
     if(!r.ok) throw new Error('HTTP '+r.status);
   }catch(e){
-    const base=(API_BASE||'http://127.0.0.1:__API_PORT__');
+    const base=(API_BASE||'').includes('__API_PORT__')?'http://127.0.0.1:8770':(API_BASE||'http://127.0.0.1:8765');
     try{r=await fetch(base+'/api/upload',{method:'POST',body:fd})}catch(e2){toast('上传失败: 后端未连接');return}
   }
   const j=await r.json();
