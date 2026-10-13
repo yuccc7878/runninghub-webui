@@ -75,6 +75,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun startPythonServer() {
         try {
+            // 初始化产物导出器（MediaStore → 公共目录）
+            Exporter.init(this)
             // 初始化 Chaquopy 运行时
             if (!Python.isStarted()) {
                 Python.start(AndroidPlatform(this))

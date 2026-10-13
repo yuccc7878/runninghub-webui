@@ -237,7 +237,11 @@ def submit_prompt(prompt: dict, client_id: str = "rh-api-script") -> str:
 
 
 # ==================== 4. 轮询结果 ====================
-def poll_history(prompt_id: str, interval: int = 15, max_wait: int = 600) -> dict:
+class PollTimeout(Exception):
+    """轮询超时（排队/生成超过 max_wait），任务可能仍远端正跑，不能判死。"""
+
+
+def poll_history(prompt_id: str, interval: int = 15, max_wait: int = 1800) -> dict:
     """轮询 /history/<prompt_id> 直到 success/fail，返回完整 history entry"""
     t0 = time.time()
     while time.time() - t0 < max_wait:
@@ -259,7 +263,7 @@ def poll_history(prompt_id: str, interval: int = 15, max_wait: int = 600) -> dic
                 time.sleep(interval)
                 continue
             raise
-    raise RuntimeError("poll timeout")
+    raise PollTimeout(f"poll timeout after {max_wait}s: {prompt_id}")
 
 
 # ==================== 5. 提取输出与下载 ====================
@@ -307,6 +311,7 @@ def run(
     mode: str = None,
     lora: str = None,
     lora_strength: float = None,
+    on_submit: callable = None,     # 提交成功回调 on_submit(prompt_id)，用于立即持久化 pid
 ):
     """
     一键执行：上传素材 → 构造 prompt → 提交 → 轮询 → 下载
@@ -351,6 +356,8 @@ def run(
     # 3. 提交
     prompt_id = submit_prompt(prompt)
     print(f"[提交成功] prompt_id = {prompt_id}")
+    if on_submit:
+        on_submit(prompt_id)
 
     # 4. 轮询
     entry = poll_history(prompt_id)

@@ -248,7 +248,11 @@ def submit(prompt, client_id="rh-krea2-nsfw"):
     raise RuntimeError(f"submit failed: {d}")
 
 
-def poll(prompt_id, interval=6, max_wait=600, verbose=True):
+class PollTimeout(Exception):
+    """轮询超时（排队/生成超过 max_wait），任务可能仍远端正跑，不能判死。"""
+
+
+def poll(prompt_id, interval=6, max_wait=1800, verbose=True):
     t0 = time.time()
     while time.time() - t0 < max_wait:
         try:
@@ -270,7 +274,7 @@ def poll(prompt_id, interval=6, max_wait=600, verbose=True):
             if el % 30 < interval:
                 print(f"  ...等待 {el}s")
         time.sleep(interval)
-    raise RuntimeError("poll timeout")
+    raise PollTimeout(f"poll timeout after {max_wait}s: {prompt_id}")
 
 
 def get_cost(prompt_id):

@@ -565,10 +565,38 @@ def _save_state():
         pass
 
 
+def _export_to_public(files):
+    """把产物导出到公共目录（Pictures|Movies|Download/RunningHub）。
+    仅安卓环境生效（通过 Chaquopy jclass 调 Kotlin Exporter），本地静默跳过。
+    files: 文件名列表（相对 OUT_DIR）。返回成功导出的文件名列表。"""
+    if not files:
+        return []
+    try:
+        from java import jclass
+        Exporter = jclass("com.yuccc.runninghub.Exporter")
+        paths = []
+        for f in files:
+            p = OUT_DIR / os.path.basename(str(f))
+            if p.exists():
+                paths.append(str(p))
+        if not paths:
+            return []
+        done = list(Exporter.exportList(paths) or [])
+        return done
+    except Exception:
+        return []
+
+
 def _run_task(task_id, script_key, params):
     cfg = REGISTRY[script_key]
     try:
         mod = _load_module(cfg["module"])
+        # 提交成功立即持久化 pid（on_submit 回调：pid 永不丢，app 被杀也能续）
+        def _on_submit(pid):
+            with _lock:
+                TASKS[task_id]["pid"] = pid
+                TASKS[task_id]["status"] = "submitting"
+            _save_state()
         # 注入用户配置的 API Key（替代脚本内写死的 key）
         _inject_api_key(mod)
         # krea2_i2i 分支会 import rh_zimage_api 做参考图上传，也要注入
@@ -608,11 +636,13 @@ def _run_task(task_id, script_key, params):
                     noise_seed=seed,
                     download_dir=str(OUT_DIR),
                     lora=lora, lora_strength=lora_st,
+                    on_submit=_on_submit,
                 )
                 videos = res.get("videos", []) or []
                 with _lock:
                     TASKS[task_id].update({"status": "done", "image": videos[0] if videos else None,
                                            "files": videos, "pid": res.get("prompt_id"), "error": None})
+                _export_to_public(videos)
             else:
                 ref_image = params.get("ref_image") or ""
                 ref_paths = None
@@ -631,6 +661,7 @@ def _run_task(task_id, script_key, params):
                     download_dir=str(OUT_DIR),
                     mode=mode,
                     lora=lora, lora_strength=lora_st,
+                    on_submit=_on_submit,
                 )
                 saved = res.get("saved", []) or []
                 # omni 工作流输出可能混入中间节点 png，image 优先选 mp4
@@ -638,6 +669,7 @@ def _run_task(task_id, script_key, params):
                 with _lock:
                     TASKS[task_id].update({"status": "done", "image": _img,
                                            "files": saved, "pid": res.get("prompt_id"), "error": None})
+                _export_to_public(saved)
             _save_state()
             return
 
@@ -675,6 +707,7 @@ def _run_task(task_id, script_key, params):
                 seed=seed,
                 lora=lora, lora_strength=float(params.get("lora_strength", 0.7)) if lora else None,
                 download_dir=str(OUT_DIR),
+                on_submit=_on_submit,
             )
             saved = [os.path.basename(p) for p in (res.get("saved") or [])]
             with _lock:
@@ -682,6 +715,7 @@ def _run_task(task_id, script_key, params):
                     "status": "done", "image": saved[0] if saved else None,
                     "files": saved, "pid": res.get("prompt_id"), "error": None,
                 })
+            _export_to_public(saved)
             _save_state()
             return
         else:
@@ -731,7 +765,17 @@ def _run_task(task_id, script_key, params):
             pid = mod.submit(p)
             with _lock:
                 TASKS[task_id]["pid"] = pid
-            entry = mod.poll(pid, max_wait=900)
+            _save_state()
+            try:
+                entry = mod.poll(pid, max_wait=1800)
+            except Exception as _e:
+                if type(_e).__name__ == "PollTimeout":
+                    with _lock:
+                        TASKS[task_id]["status"] = "poll_timeout"
+                        TASKS[task_id]["error"] = f"排队超时（30分钟），远端可能仍在跑。可用错误查询继续。"
+                    _save_state()
+                    return
+                raise
             saved = []
             for f in mod.extract(entry):
                 saved.append(mod.download(f, str(OUT_DIR)))
@@ -741,6 +785,7 @@ def _run_task(task_id, script_key, params):
                     "status": "done", "image": saved[0] if saved else None,
                     "files": saved, "cost": costs[0] if costs else {}, "error": None,
                 })
+            _export_to_public([os.path.basename(p) for p in saved])
             _save_state()
             return
 
@@ -748,10 +793,190 @@ def _run_task(task_id, script_key, params):
             TASKS[task_id]["status"] = "done"
         _save_state()
     except Exception as e:
+        # PollTimeout：排队超时，远端可能仍成功 → 不判死，保留 pid 等恢复
+        if type(e).__name__ == "PollTimeout":
+            with _lock:
+                TASKS[task_id]["status"] = "poll_timeout"
+                TASKS[task_id]["error"] = f"排队超时（30分钟），远端可能仍在跑。可用错误查询继续。"
+            _save_state()
+            return
         with _lock:
             TASKS[task_id]["status"] = "error"
             TASKS[task_id]["error"] = f"{type(e).__name__}: {e}"
         _save_state()
+
+
+# ============================================================
+# 错误查询 / 断点续跑（v0.4.7）
+# ============================================================
+def _check_pid_status(pid):
+    """一次性查远端任务状态，不阻塞。返回 {status, detail}。
+    status ∈ success / error / pending / not_found / api_error"""
+    import urllib.request
+    import urllib.error
+    key = _get_api_key()
+    if not key:
+        return {"status": "api_error", "detail": "未配置 API Key"}
+    try:
+        req = urllib.request.Request(f"https://www.runninghub.ai/proxy/{key}/history/{pid}", timeout=30)
+        d = json.loads(urllib.request.urlopen(req, timeout=30).read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {"status": "not_found", "detail": "远端无此任务"}
+        return {"status": "api_error", "detail": f"HTTP {e.code}"}
+    except Exception as e:
+        return {"status": "api_error", "detail": str(e)}
+    if isinstance(d, dict) and pid in d:
+        entry = d[pid]
+        st = entry.get("status", {})
+        if st.get("status_str") == "success":
+            return {"status": "success", "detail": entry}
+        for m in st.get("messages", []):
+            if m[0] == "execution_error":
+                return {"status": "error", "detail": json.dumps(m[1], ensure_ascii=False)}
+        return {"status": "pending", "detail": entry}
+    return {"status": "not_found", "detail": "远端无此任务"}
+
+
+def _download_from_entry(task_id, mod, entry, pid):
+    """从 history entry 提取产物并落盘到 OUT_DIR，任务转 done"""
+    saved = []
+    if hasattr(mod, "extract") and hasattr(mod, "download"):
+        # krea2 模块接口名
+        for f in mod.extract(entry):
+            saved.append(os.path.basename(mod.download(f, str(OUT_DIR))))
+    else:
+        extracts = mod.extract_outputs(entry)
+        for out in extracts:
+            p = mod.download_output(out, str(OUT_DIR))
+            if p and os.path.basename(p) not in saved:
+                saved.append(os.path.basename(p))
+    with _lock:
+        TASKS[task_id].update({"status": "done", "image": saved[0] if saved else None,
+                               "files": saved, "pid": pid, "error": None})
+    _save_state()
+    _export_to_public(saved)
+    return saved
+
+
+def _claim_runaway_pid(task_id, script_key):
+    """无 pid 时从 /queue + /history 认领一条不冲突的远端任务 pid（无法 100% 保证对应，按时间窗启发式）"""
+    import urllib.request
+    key = _get_api_key()
+    if not key:
+        return None
+    used = {str(t.get("pid")) for t in TASKS.values() if t.get("pid")}
+    cands = []
+    try:
+        q = json.loads(urllib.request.urlopen(
+            urllib.request.Request(f"https://www.runninghub.ai/proxy/{key}/queue", timeout=30),
+            timeout=30).read().decode("utf-8", errors="replace"))
+        for x in (q.get("queue_running") or []):
+            cands.append(str(x[0]))
+        for x in (q.get("queue_pending") or []):
+            cands.append(str(x[0]))
+    except Exception:
+        pass
+    try:
+        h = json.loads(urllib.request.urlopen(
+            urllib.request.Request(f"https://www.runninghub.ai/proxy/{key}/history", timeout=30),
+            timeout=30).read().decode("utf-8", errors="replace"))
+        if isinstance(h, dict):
+            cands += [str(p) for p in h.keys()]
+    except Exception:
+        pass
+    for pid in cands:
+        if pid and pid not in used and pid.lower() != "none":
+            return pid
+    return None
+
+
+def _resume_poll(task_id, mod, pid):
+    """续轮询线程：阻塞等 success（最长 30 分钟），成功即落盘；超时转 poll_timeout"""
+    try:
+        _inject_api_key(mod)
+        with _lock:
+            TASKS[task_id]["status"] = "submitting"
+            TASKS[task_id]["error"] = None
+        _save_state()
+        if hasattr(mod, "poll"):
+            entry = mod.poll(pid, max_wait=1800)
+        else:
+            entry = mod.poll_history(pid, max_wait=1800)
+        _download_from_entry(task_id, mod, entry, pid)
+    except Exception as e:
+        if type(e).__name__ == "PollTimeout":
+            with _lock:
+                TASKS[task_id]["status"] = "poll_timeout"
+                TASKS[task_id]["error"] = "排队超时，远端可能仍在跑。可再次错误查询。"
+            _save_state()
+        else:
+            with _lock:
+                TASKS[task_id]["status"] = "error"
+                TASKS[task_id]["error"] = f"{type(e).__name__}: {e}"
+            _save_state()
+
+
+def _inspect_task(task_id):
+    """错误查询总调度：有 pid 查远端 / 无 pid 自动认领 / 认领不到自动重提。全程只点一次。"""
+    with _lock:
+        if task_id not in TASKS:
+            return {"ok": False, "error": f"任务不存在: {task_id}"}
+        t = TASKS[task_id]
+        script_key = t.get("script") or ""
+        params = t.get("params") or {}
+        pid = t.get("pid")
+    if script_key not in REGISTRY:
+        return {"ok": False, "error": f"脚本不可用: {script_key}"}
+    mod = _load_module(REGISTRY[script_key]["module"])
+
+    # ---- 1. 有 pid：查远端 ----
+    if pid:
+        st = _check_pid_status(pid)
+        if st["status"] == "success":
+            try:
+                saved = _download_from_entry(task_id, mod, st["detail"], pid)
+                return {"ok": True, "action": "pulled", "pid": pid, "saved": saved,
+                        "msg": f"远端已完成，已拉回 {len(saved)} 个产物"}
+            except Exception as e:
+                return {"ok": False, "error": f"落盘失败: {e}"}
+        if st["status"] == "error":
+            with _lock:
+                TASKS[task_id]["status"] = "error"
+                TASKS[task_id]["error"] = f"远端执行失败: {st['detail']}"
+            _save_state()
+            return {"ok": True, "action": "remote_error", "pid": pid, "detail": st["detail"],
+                    "msg": "远端已失败，可再次提交"}
+        if st["status"] == "pending":
+            threading.Thread(target=_resume_poll, args=(task_id, mod, pid), daemon=True).start()
+            return {"ok": True, "action": "resumed", "pid": pid,
+                    "msg": "远端仍在排队/生成中，已恢复轮询，出图自动落盘"}
+        # not_found / api_error → 尝试认领或重提
+        pid = None
+
+    # ---- 2. 无 pid：自动认领 ----
+    if not pid:
+        claimed = _claim_runaway_pid(task_id, script_key)
+        if claimed:
+            with _lock:
+                TASKS[task_id]["pid"] = claimed
+            _save_state()
+            st = _check_pid_status(claimed)
+            if st["status"] == "success":
+                try:
+                    saved = _download_from_entry(task_id, mod, st["detail"], claimed)
+                    return {"ok": True, "action": "claimed_pulled", "pid": claimed, "saved": saved,
+                            "msg": f"自动认领远端任务并拉回 {len(saved)} 个产物"}
+                except Exception as e:
+                    return {"ok": False, "error": f"落盘失败: {e}"}
+            threading.Thread(target=_resume_poll, args=(task_id, mod, claimed), daemon=True).start()
+            return {"ok": True, "action": "claimed_resumed", "pid": claimed,
+                    "msg": "已自动认领远端任务并恢复轮询，出图自动落盘"}
+
+    # ---- 3. 认领不到：自动重提（复用 _run_task 全流程，新 pid 写回当前任务）----
+    threading.Thread(target=_run_task, args=(task_id, script_key, params), daemon=True).start()
+    return {"ok": True, "action": "resubmitted",
+            "msg": "远端无匹配任务，已自动重新提交（新任务号会自动接管）"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1010,6 +1235,40 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, "name": name})
             except Exception as e:
                 self._send(500, {"error": str(e)})
+        elif path == "/api/task/export":
+            try:
+                data = json.loads(raw.decode() or "{}")
+                tid = str(data.get("id") or "").strip()
+                with _lock:
+                    t = TASKS.get(tid)
+                if not t:
+                    self._send(404, {"error": f"任务不存在: {tid}"})
+                    return
+                files = t.get("files") or []
+                if t.get("image") and t["image"] not in files:
+                    files = [t["image"]] + list(files)
+                if not files:
+                    self._send(400, {"error": "该任务没有产物文件"})
+                    return
+                done = _export_to_public(files)
+                if not done:
+                    self._send(400, {"error": "导出失败（可能非安卓环境或 MediaStore 不可用）"})
+                    return
+                self._send(200, {"ok": True, "exported": done})
+            except Exception as e:
+                self._send(500, {"error": f"导出失败: {e}"})
+        elif path == "/api/task/inspect":
+            try:
+                data = json.loads(raw.decode() or "{}")
+                tid = str(data.get("id") or "").strip()
+                if not tid:
+                    self._send(400, {"error": "缺少任务 id"})
+                    return
+                r = _inspect_task(tid)
+                self._send(200, r)
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                self._send(500, {"error": f"错误查询失败: {e}"})
         elif path == "/api/task/delete":
             try:
                 data = json.loads(raw.decode() or "{}")

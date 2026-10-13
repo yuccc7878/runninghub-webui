@@ -71,6 +71,15 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 #drawerTasks .tk .rerun:hover{background:var(--acc);color:#1a1a1a}
 #drawerTasks .tk .del{position:absolute;top:4px;left:4px;background:rgba(120,30,30,.75);border:1px solid rgba(255,120,120,.4);color:#fff;border-radius:6px;padding:2px 6px;font-size:10px;cursor:pointer;z-index:2;transition:.15s;opacity:1}
 #drawerTasks .tk .del:hover{background:#c0392b;color:#fff}
+#drawerTasks .tk .st.poll_timeout{background:rgba(160,120,220,.9);color:#fff}
+#drawerTasks .tk .st.done{background:rgba(80,160,100,.85);color:#fff}
+#taskMenu{position:fixed;z-index:200;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.6);min-width:140px;padding:4px;display:none}
+#taskMenu .tm-item{display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:12px;color:#eee;cursor:pointer;border-radius:7px;transition:.12s}
+#taskMenu .tm-item:hover{background:rgba(255,255,255,.08)}
+#taskMenu .tm-item.tm-del:hover{background:rgba(200,60,60,.25);color:#ff9d9d}
+#taskMenu .tm-item.tm-insp:hover{background:rgba(90,150,255,.25);color:#9dc4ff}
+#taskMenu .tm-item.tm-exp:hover{background:rgba(60,190,120,.25);color:#8ff0be}
+#taskMenu .tm-item.tm-rerun:hover{background:rgba(224,160,60,.25);color:#ffd28a}
 #drawerTasks .tk .nothumb{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:8px;text-align:center;color:var(--dim);font-size:10px;gap:4px}
 #drawerTasks .tk .nothumb .prompt{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;word-break:break-all}
 /* ===== 大图预览弹层 ===== */
@@ -213,10 +222,17 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 <div id="delBox" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:420px;max-width:92vw;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;z-index:105;display:none;box-shadow:0 8px 40px rgba(0,0,0,.5)">
   <h3 style="font-size:14px;color:var(--err);margin-bottom:8px">🗑 删除任务</h3>
   <div id="delInfo" style="font-size:12px;color:var(--dim);margin-bottom:14px;max-height:140px;overflow-y:auto;word-break:break-all"></div>
-  <div style="display:flex;gap:8px">
+<div style="display:flex;gap:8px">
     <button class="btn" style="margin:0;flex:1;background:#c0392b" onclick="doDel()">🗑 确认删除</button>
     <button class="btn" style="margin:0;flex:1;background:#3a3f4b" onclick="closeDel()">取消</button>
-  </div>
+  </div></div>
+
+<!-- 任务长按菜单 -->
+<div id="taskMenu">
+  <div class="tm-item tm-insp" onclick="var _t=MENU_TASK;hideTaskMenu();inspectTask(_t)">🔍 错误查询</div>
+  <div class="tm-item tm-exp" onclick="var _t=MENU_TASK;hideTaskMenu();exportTask(_t)">💾 保存到相册</div>
+  <div class="tm-item tm-rerun" onclick="var _t=MENU_TASK;hideTaskMenu();rerunTask(_t?._id||_t?.id)">↻ 再次提交</div>
+  <div class="tm-item tm-del" onclick="var _t=MENU_TASK;hideTaskMenu();delTask(_t?._id||_t?.id)">🗑 删除</div>
 </div>
 
 <!-- ===== 应用市场面板 ===== -->
@@ -591,19 +607,33 @@ async function refreshTasks(){
       body=`<img src="${mediaUrl(t.image)}" loading="lazy">`;
     }else{
       const prompt=(t.params&&t.params.prompt||'').slice(0,60);
-      body=`<div class="nothumb"><div style="font-size:10px;opacity:.7">${st==='error'?'⚠ 失败':(st==='done'?'✅ 完成':'⏳ '+st)}</div>
+      body=`<div class="nothumb"><div style="font-size:10px;opacity:.7">${st==='error'?'⚠ 失败':(st==='done'?'✅ 完成':(st==='poll_timeout'?'🕐 排队超时':'⏳ '+st))}</div>
         <div class="prompt">${prompt||'（无提示词）'}</div>${t.error?`<div style="font-size:9px;color:var(--err);word-break:break-all">${t.error.slice(0,40)}</div>`:''}</div>`;
     }
     // 底部状态条
     const tm=new Date(t.ts*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     const bar=`<div class="tkbar">
-      <span class="st ${st}">${st==='done'?'✓':st==='error'?'✗':st==='submitting'?'提交中':st}</span>
+      <span class="st ${st}">${st==='done'?'✓':st==='error'?'✗':st==='submitting'?'提交中':(st==='poll_timeout'?'排队超时':st)}</span>
       <span class="tm">${tm}</span>
     </div>`;
     const rerun=`<span class="rerun" onclick="event.stopPropagation();rerunTask('${t.id}')" title="用相同参数再跑一次">↻</span>`;
     const del=`<span class="del" onclick="event.stopPropagation();delTask('${t.id}')" title="删除此任务">✕</span>`;
     div.innerHTML=body+bar+rerun+del;
-    div.onclick=()=>openPreview(t);
+    div.onclick=()=>{ if(_supClick){_supClick=false;return;} openPreview(t); };
+    div.oncontextmenu=(e)=>{e.preventDefault();e.stopPropagation();showTaskMenu(t,{clientX:e.clientX,clientY:e.clientY});};
+    // 移动端长按（≥550ms）→ 菜单；滑动/松开取消，抑制随后的 click
+    div.addEventListener('touchstart',(e)=>{
+      const tx=e.touches[0].clientX, ty=e.touches[0].clientY;
+      const card=t;
+      clearTimeout(_lpT);
+      _lpT=setTimeout(()=>{
+        if(e.cancelable)e.preventDefault();
+        _supClick=true;
+        showTaskMenu(card,{clientX:tx,clientY:ty});
+      },550);
+    },{passive:false});
+    div.addEventListener('touchend',()=>clearTimeout(_lpT));
+    div.addEventListener('touchmove',()=>clearTimeout(_lpT));
     box.appendChild(div);
   });
 }
@@ -629,6 +659,55 @@ function closePreview(){
   $('previewMask').style.display='none';
   $('previewBox').style.display='none';
   const v=$('pvMedia').querySelector('video');if(v)v.pause();
+}
+
+// ===== 任务长按菜单 =====
+let MENU_TASK=null;
+let _lpT=null;       // 长按计时器
+let _supClick=false; // 长按后抑制一次 click（避免误开预览）
+function showTaskMenu(t,e){
+  MENU_TASK=t;
+  const m=$('taskMenu');
+  m.style.display='block';
+  const r=m.getBoundingClientRect();
+  let x=(e.clientX||0), y=(e.clientY||0);
+  if(x+r.width>innerWidth)x=innerWidth-r.width-8;
+  if(y+r.height>innerHeight)y=innerHeight-r.height-8;
+  m.style.left=Math.max(4,x)+'px';
+  m.style.top=Math.max(4,y)+'px';
+}
+function hideTaskMenu(){const m=$('taskMenu');if(m)m.style.display='none';MENU_TASK=null;}
+document.addEventListener('click',()=>hideTaskMenu());
+function inspectTask(t){
+  if(!t||!t.id){toast('任务无效');return}
+  toast('🔍 错误查询中…');
+  const label=document.createElement('div');
+  label.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:300;background:#15233a;color:#9dc4ff;border:1px solid #2c4a75;border-radius:8px;padding:6px 14px;font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.4)';
+  label.textContent='🔍 查询远端任务状态…';
+  document.body.appendChild(label);
+  setTimeout(()=>label.remove(),2000);
+  api('/api/task/inspect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:t.id})})
+    .then(r=>{
+      if(r.ok){
+        if(r.action==='pulled'||r.action==='claimed_pulled')toast('✅ '+r.msg);
+        else if(r.action==='resumed'||r.action==='claimed_resumed')toast('⏳ '+r.msg);
+        else if(r.action==='resubmitted')toast('↻ '+r.msg);
+        else if(r.action==='remote_error')toast('❌ '+r.msg);
+        else toast(r.msg||'查询完成');
+      }else toast('查询失败: '+(r.error||'未知'));
+      refreshTasks();
+    })
+    .catch(e=>{toast('错误查询失败: 后端未连接');refreshTasks();});
+}
+function exportTask(t){
+  if(!t||!t.id){toast('任务无效');return}
+  toast('💾 导出中…');
+  api('/api/task/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:t.id})})
+    .then(r=>{
+      if(r.ok)toast('✅ 已保存到相册/公共目录: '+(r.exported||[]).join(', '));
+      else toast('导出失败: '+(r.error||'未知'));
+    })
+    .catch(e=>toast('导出失败: 后端未连接'));
 }
 
 // 重跑：用任务原 script+params 再提交一次（先弹窗确认防误触）
