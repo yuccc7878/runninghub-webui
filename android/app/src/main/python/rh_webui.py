@@ -495,8 +495,15 @@ REGISTRY = {
             ], "def": "1080x1920"},
             {"k": "steps", "label": "步数", "type": "int", "def": 12},
             {"k": "denoise", "label": "重绘强度", "type": "float", "def": 0.7, "help": "0.5-0.6锁姿势 / 0.7平衡 / 0.85+大幅改写"},
-            {"k": "lora", "label": "LoRA", "type": "select", "options": ["none", "charm", "nofilter", "flowdpo", "model", "peach"], "def": "none"},
-            {"k": "lora_strength", "label": "LoRA强度", "type": "float", "def": 0.7, "help": "仅 LoRA≠none 时生效"},
+            {"k": "lora", "label": "LoRA", "type": "select", "options": [
+                {"v": "none", "label": "无"},
+                {"v": "charm", "label": "charm · 风情万种人像（细节/锐度最高，欧美骨相+重影调）"},
+                {"v": "nofilter", "label": "nofilter · 无滤真实（去AI味/素人感，肤质真实，会轻微改脸）"},
+                {"v": "flowdpo", "label": "flowdpo · 真实感光影（治扁平/过曝/塑料感）"},
+                {"v": "model", "label": "model · 全能模特展示（强度0.45/步数10）"},
+                {"v": "peach", "label": "peach · 蜜桃臀加强（⚠会改脸型，仅限不露脸构图）"},
+            ], "def": "none"},
+            {"k": "lora_strength", "label": "LoRA强度", "type": "float", "def": 0.7, "help": "仅 LoRA≠无 时生效"},
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
         ],
     },
@@ -509,12 +516,9 @@ REGISTRY = {
             {"k": "ratio", "label": "比例", "type": "select", "options": ["9:16", "16:9", "1:1", "2:3", "3:2", "3:4", "4:3", "21:9"], "def": "9:16"},
             {"k": "mp", "label": "分辨率", "type": "select", "options": [{"v": "0.5", "label": "0.5 MP（低清快出）"}, {"v": "1.0", "label": "1 MP（标清）"}, {"v": "2.0", "label": "2 MP ≈1080×1920（推荐）"}, {"v": "4.0", "label": "4 MP（2K级）"}, {"v": "8.0", "label": "8 MP（超高清）"}], "def": "2.0", "help": "2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},
             {"k": "steps", "label": "步数", "type": "int", "def": 12},
-            {"k": "style", "label": "风格LoRA", "type": "checkbox", "def": True, "help": "勾选=启用风格LoRA"},
-            {"k": "style_strength", "label": "风格LoRA强度", "type": "float", "def": 0.5, "group": "advanced"},
-            {"k": "realism", "label": "写实LoRA", "type": "checkbox", "def": True, "help": "勾选=启用写实LoRA"},
-            {"k": "realism_strength", "label": "写实LoRA强度", "type": "float", "def": 0.6, "group": "advanced"},
-            {"k": "body", "label": "身材LoRA", "type": "checkbox", "def": True, "help": "勾选=启用身材LoRA"},
-            {"k": "body_strength", "label": "身材LoRA强度", "type": "float", "def": 0.3, "group": "advanced"},
+            {"k": "style", "label": "画风LoRA · 风情万种", "type": "lora", "def": True, "def_strength": 0.5, "help": "风情万种画风，整体氛围色调"},
+            {"k": "realism", "label": "写实LoRA · 真实感引擎", "type": "lora", "def": True, "def_strength": 0.6, "help": "皮肤真实质感，去AI感"},
+            {"k": "body", "label": "身材LoRA · 天魔", "type": "lora", "def": True, "def_strength": 0.3, "help": "身材曲线强化（丰胸细腰翘臀）"},
             {"k": "prompt_weight", "label": "PromptWeight", "type": "float", "def": 1.0, "help": "0=禁用；>0 启用 (词:1.5) 权重语法"},
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
             {"k": "cfg", "label": "CFG", "type": "float", "def": 1.0, "help": "Krea2 建议 1.0", "group": "advanced"},
@@ -536,12 +540,9 @@ REGISTRY = {
             {"k": "mp", "label": "分辨率", "type": "select", "options": [{"v": "0.5", "label": "0.5 MP（低清快出）"}, {"v": "1.0", "label": "1 MP（标清）"}, {"v": "2.0", "label": "2 MP ≈1080×1920（推荐）"}, {"v": "4.0", "label": "4 MP（2K级）"}, {"v": "8.0", "label": "8 MP（超高清）"}], "def": "2.0", "help": "2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},
             {"k": "steps", "label": "步数", "type": "int", "def": 12},
             {"k": "denoise", "label": "重绘强度", "type": "float", "def": 0.65},
-            {"k": "style", "label": "风格LoRA", "type": "checkbox", "def": True, "help": "勾选=启用风格LoRA"},
-            {"k": "style_strength", "label": "风格LoRA强度", "type": "float", "def": 0.5, "group": "advanced"},
-            {"k": "realism", "label": "写实LoRA", "type": "checkbox", "def": True, "help": "勾选=启用写实LoRA"},
-            {"k": "realism_strength", "label": "写实LoRA强度", "type": "float", "def": 0.6, "group": "advanced"},
-            {"k": "body", "label": "身材LoRA", "type": "checkbox", "def": True, "help": "勾选=启用身材LoRA"},
-            {"k": "body_strength", "label": "身材LoRA强度", "type": "float", "def": 0.3, "group": "advanced"},
+            {"k": "style", "label": "画风LoRA · 风情万种", "type": "lora", "def": True, "def_strength": 0.5, "help": "风情万种画风，整体氛围色调"},
+            {"k": "realism", "label": "写实LoRA · 真实感引擎", "type": "lora", "def": True, "def_strength": 0.6, "help": "皮肤真实质感，去AI感"},
+            {"k": "body", "label": "身材LoRA · 天魔", "type": "lora", "def": True, "def_strength": 0.3, "help": "身材曲线强化（丰胸细腰翘臀）"},
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
             {"k": "cfg", "label": "CFG", "type": "float", "def": 1.0, "help": "Krea2 建议 1.0", "group": "advanced"},
             {"k": "sampler", "label": "采样器", "type": "select", "options": ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "dpmpp_sde", "uni_pc"], "def": "euler", "group": "advanced"},
@@ -791,7 +792,7 @@ def _run_task(task_id, script_key, params):
                 seed = int(seed_s) if seed_s else None
             except ValueError:
                 seed = None
-            # LoRA 开关（checkbox）：true/false / "true"/"false" / "1"/"0" 都兼容
+            # LoRA 开关（lora 复合控件）：style=勾选状态，style_strength=强度
             def _chk(v, d=True):
                 if v is None:
                     return d
