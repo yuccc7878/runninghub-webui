@@ -1,3 +1,7 @@
+## [0.4.9.1] - 2026-10-14
+### 修复
+- **App 内参考图上传无反应**：Android WebView 缺 `WebChromeClient.onShowFileChooser` 回调，`<input type="file">` 弹不出系统文件选择器。补上文件选择回调 + `onActivityResult` 处理 + 泄漏防护（仅安卓壳改动，需重装 APK）。
+
 ## [0.4.9] - 2026-10-14
 ### 新增
 - **抽取尾帧（长按任务菜单）**：长按历史任务卡片 → 🎞 抽取尾帧。视频任务自动抽取最后一帧存入素材库（refs/）并设为当前参考图，可直接拿去做图生图首帧。双环境抽帧：本地走 `ffmpeg -sseof`，安卓走系统 `MediaMetadataRetriever`（新增 `VideoFrames.kt`，无需权限）。
