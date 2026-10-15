@@ -331,14 +331,14 @@ def _restart_backend():
 
 
 # ============================================================
-# 更新检测（v0.6.0）：GitHub 最新 Release vs 当前版本
+# 更新检测（v0.5.0）：GitHub 最新 Release vs 当前版本
 # 免 API 方案：latest 重定向 → 解析 tag，绕开 GitHub API 限流(60次/h)
 # ============================================================
-CUR_VERSION = "0.6.0"          # 当前版本号（build.gradle versionName）
+CUR_VERSION = "0.5.0"          # 当前版本号（build.gradle versionName）
 _UPDATE_CACHE = {"ts": 0, "data": None}   # 15 分钟缓存，避免频繁打外网
 
 def _version_tuple(v):
-    """'0.4.9.1' → (0,4,9,1)；'v0.6.0-alpha' 之类取数字段。解析失败返回 (0,)。"""
+    """'0.4.9.1' → (0,4,9,1)；'v0.5.0-alpha' 之类取数字段。解析失败返回 (0,)。"""
     import re as _re
     m = _re.findall(r"\d+", str(v))
     return tuple(int(x) for x in m[:4]) or (0,)
@@ -434,7 +434,7 @@ def _inject_api_key(mod):
         return False
     mods = [mod]
     # 无论传哪个模块，都把所有底层脚本模块一起注入，避免跨模块调用漏注入
-    for mname in ("rh_zimage_api", "rh_krea2_nsfw", "rh_h3_flf_api", "rh_workflow_api", "rh_h3_face_swap", "rh_reactor_swap", "rh_wan_animate"):
+    for mname in ("rh_zimage_api", "rh_krea2_nsfw", "rh_h3_flf_api", "rh_workflow_api"):
         try:
             m = importlib.import_module(mname)
             if m not in mods:
@@ -638,20 +638,6 @@ REGISTRY = {
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
         ],
     },
-    "h3_face_swap": {
-        "name": "MiniMaxH3 视频换脸 (V2V)",
-        "desc": "参考人脸图 + 目标视频 → H3 主模重绘视频，保持原视频动作/内容但人脸被替换。所有自定义 LoRA 已断，仅保留 turbo 加速",
-        "module": "rh_h3_face_swap", "mode": "video",
-        "params": [
-            {"k": "ref_image", "label": "参考人脸图", "type": "ref", "def": "", "help": "要换上去的人脸（1 张即可，越多越稳）"},
-            {"k": "ref_video", "label": "目标视频", "type": "ref", "def": "", "help": "要换脸的视频（从出图产物选）"},
-            {"k": "ratio", "label": "比例", "type": "select", "options": ["9:16 (Portrait Widescreen)", "16:9 (Widescreen)", "1:1 (Square)", "3:4 (Portrait Standard)", "4:3 (Standard)", "21:9 (Ultrawide)"], "def": "9:16 (Portrait Widescreen)"},
-            {"k": "megapixels", "label": "分辨率", "type": "select", "options": [{"v": "0.25", "label": "0.25 MP（低清快出）"}, {"v": "0.4", "label": "0.4 MP（标清）"}, {"v": "0.6", "label": "0.6 MP（推荐）"}, {"v": "0.9", "label": "0.9 MP（高清）"}, {"v": "1.2", "label": "1.2 MP（超清）"}], "def": "0.4"},
-            {"k": "duration", "label": "时长(秒)", "type": "float", "def": 5, "help": "视频长度，越长越贵"},
-            {"k": "steps", "label": "步数", "type": "int", "def": 8, "help": "turbo 8 步固定，不建议改"},
-            {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
-        ],
-    },
     "illustrious_t2i": {
         "name": "Illustrious 二次元文生图 (T2I)",
         "desc": "WAI-illustrious-SDXL 二次元底模（自带动漫画风）。可选加 Smooth_Booster 画质增强 / Cunnystyle 插画微调。半写实 CG 动漫风",
@@ -669,33 +655,6 @@ REGISTRY = {
             {"k": "smooth", "label": "画质增强 Smooth_Booster", "type": "lora", "def": True, "def_strength": 0.9, "help": "画质平滑/细节增强（通用，二次元底模也适用）"},
             {"k": "cunnystyle", "label": "插画微调 Cunnystyle", "type": "lora", "def": False, "def_strength": 0.8, "help": "平台工作流自带插画风格微调（底模已是二次元，这层可选加味，具体效果待实测）"},
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
-        ],
-    },
-    "reactor_swap": {
-        "name": "视频换脸 · 只换脸 (ReActor)",
-        "desc": "像素级只换脸：参考人脸图 + 目标视频 → 只替换五官，身体/服装/背景/动作完全不动。⚠ 换脸效果取决于脸型匹配：源视频脸型与参考图差异过大时五官会变形，建议选脸型相近的素材",
-        "module": "rh_reactor_swap", "mode": "video",
-        "params": [
-            {"k": "ref_image", "label": "参考人脸图", "type": "ref", "def": "", "help": "要换上去的五官来源。⚠ 与源视频脸型越接近越自然，差异过大会变形失真"},
-            {"k": "ref_video", "label": "目标视频", "type": "ref", "def": "", "help": "要换脸的视频（从出图产物选）。脸型与参考图差异过大会变形，建议先选脸型相近的素材"},
-            {"k": "face_restore", "label": "人脸修复强度", "type": "float", "def": 0.4, "help": "0=不修复（保留原质感）/ 0.4 默认 / 1=强磨皮"},
-            {"k": "compare", "label": "额外输出对比图（左换脸/右原图）", "type": "checkbox", "def": False},
-        ],
-    },
-    "wan_animate": {
-        "name": "动作迁移 · 角色替换 (Wan Animate)",
-        "desc": "生成式角色替换：参考图决定身份（脸/发型/服装），源视频决定动作。会连同服装/背景一起重画",
-        "module": "rh_wan_animate", "mode": "video",
-        "params": [
-            {"k": "ref_image", "label": "参考图（身份）", "type": "ref", "def": "", "help": "决定生成人物的长相/形象"},
-            {"k": "ref_image_b", "label": "第二参考图（可选）", "type": "ref", "def": "", "help": "另一角度参考图，可提升相似度"},
-            {"k": "ref_video", "label": "源视频（动作）", "type": "ref", "def": "", "help": "提供动作/姿态的参考视频"},
-            {"k": "resolution", "label": "分辨率", "type": "select", "options": [
-                {"v": "480x832", "label": "480×832（低清快出）"},
-                {"v": "544x960", "label": "544×960（标清）"},
-                {"v": "720x1280", "label": "720×1280（高清，慢）"},
-            ], "def": "480x832"},
-            {"k": "compare", "label": "额外输出对比条（含流程拼接）", "type": "checkbox", "def": False},
         ],
     },
 }
@@ -849,111 +808,6 @@ def _run_task(task_id, script_key, params):
             except Exception:
                 pass
         prompt = params.get("prompt", "")
-
-        if script_key == "h3_face_swap":
-            # 视频换脸：参考人脸图 + 目标视频 → H3 主模重绘（LoRA 全断只用 turbo）
-            seed_s = str(params.get("seed") or "").strip()
-            try:
-                seed = int(seed_s) if seed_s else None
-            except ValueError:
-                seed = None
-            face_ref = params.get("ref_image") or ""
-            video_ref = params.get("ref_video") or ""
-            face_path = _resolve_ref_path(face_ref)
-            video_path = _resolve_ref_path(video_ref)
-            if not video_path:
-                raise RuntimeError("视频换脸需要目标视频（从出图产物选一段）")
-            if not face_path:
-                raise RuntimeError("视频换脸需要参考人脸图（素材库选一张人脸）")
-            with _lock:
-                TASKS[task_id]["status"] = "submitting"
-            res = mod.run(
-                prompt_text=prompt,
-                ref_image_paths=[face_path] if face_path else None,
-                ref_video_path=video_path,
-                aspect_ratio=params.get("ratio", "9:16 (Portrait Widescreen)"),
-                megapixels=float(params.get("megapixels", 0.4)),
-                duration=float(params.get("duration", 5)),
-                steps=int(params.get("steps", 8)),
-                noise_seed=seed,
-                download_dir=str(OUT_DIR),
-                on_submit=_on_submit,
-            )
-            videos = res.get("videos", []) or []
-            with _lock:
-                TASKS[task_id].update({"status": "done", "image": videos[0] if videos else None,
-                                       "files": videos, "pid": res.get("prompt_id"), "error": None})
-            _save_state()
-            return
-
-        if script_key == "reactor_swap":
-            # ReActor 只换脸：参考人脸图 + 目标视频 → 像素级换脸（保持原始分辨率）
-            face_ref = params.get("ref_image") or ""
-            video_ref = params.get("ref_video") or ""
-            face_path = _resolve_ref_path(face_ref)
-            video_path = _resolve_ref_path(video_ref)
-            if not video_path:
-                raise RuntimeError("视频换脸需要目标视频（从出图产物选一段）")
-            if not face_path:
-                raise RuntimeError("视频换脸需要参考人脸图（素材库选一张人脸）")
-            compare = str(params.get("compare", "")).lower() in ("true", "1", "on")
-            with _lock:
-                TASKS[task_id]["status"] = "submitting"
-            res = mod.run(
-                face_path=face_path,
-                video_path=video_path,
-                workflow_path="faceswap_aiwz.json",
-                compare=compare,
-                face_restore=float(params.get("face_restore", 0.4)),
-                download_dir=str(OUT_DIR),
-                on_submit=_on_submit,
-            )
-            videos = res.get("videos", []) or []
-            with _lock:
-                TASKS[task_id].update({"status": "done", "image": videos[0] if videos else None,
-                                       "files": videos, "pid": res.get("prompt_id"), "error": None})
-            _save_state()
-            return
-
-        if script_key == "wan_animate":
-            # Wan Animate 动作迁移：参考图（身份）+ 源视频（动作）→ 生成式角色替换
-            ref_ref = params.get("ref_image") or ""
-            ref_b_ref = params.get("ref_image_b") or ""
-            video_ref = params.get("ref_video") or ""
-            ref_path = _resolve_ref_path(ref_ref)
-            ref_b_path = _resolve_ref_path(ref_b_ref) if ref_b_ref else None
-            video_path = _resolve_ref_path(video_ref)
-            if not video_path:
-                raise RuntimeError("动作迁移需要源视频（从出图产物选一段）")
-            if not ref_path:
-                raise RuntimeError("动作迁移需要参考图（素材库选一张）")
-            # 分辨率 "宽x高"
-            w, h = 480, 832
-            res_s = str(params.get("resolution") or "").strip().lower()
-            if "x" in res_s:
-                try:
-                    w, h = (int(x) for x in res_s.split("x")[:2])
-                except ValueError:
-                    pass
-            compare = str(params.get("compare", "")).lower() in ("true", "1", "on")
-            with _lock:
-                TASKS[task_id]["status"] = "submitting"
-            res = mod.run(
-                ref_a_path=ref_path,
-                ref_b_path=ref_b_path,
-                video_path=video_path,
-                workflow_path="wan_animate_v3.json",
-                width=w, height=h,
-                compare=compare,
-                download_dir=str(OUT_DIR),
-                on_submit=_on_submit,
-            )
-            videos = res.get("videos", []) or []
-            with _lock:
-                TASKS[task_id].update({"status": "done", "image": videos[0] if videos else None,
-                                       "files": videos, "pid": res.get("prompt_id"), "error": None})
-            _save_state()
-            return
 
         if script_key in ("h3_flf_video", "h3_omni_video"):
             seed_s = str(params.get("seed") or "").strip()
