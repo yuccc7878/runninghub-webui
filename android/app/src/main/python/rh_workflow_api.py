@@ -363,15 +363,18 @@ def run(
     entry = poll_history(prompt_id)
     print(f"[执行完成] status = success")
 
-    # 5. 提取 + 下载
+    # 5. 提取 + 下载（只保留视频产物为 saved，中间节点 png 只作 outputs 记录）
     outputs = extract_outputs(entry)
     print(f"[输出文件] {len(outputs)} 个")
     saved = []
     for out in outputs:
-        if out["filename"].endswith((".mp4", ".png", ".jpg", ".webp")):
+        fn = out.get("filename") or ""
+        if fn.endswith((".mp4", ".webm", ".mov")):
             path = download_output(out, download_dir)
             saved.append(path)
-            print(f"  已下载: {path}")
+            print(f"  [视频] 已下载: {path}")
+        elif fn.endswith((".png", ".jpg", ".jpeg", ".webp")):
+            print(f"  [中间节点] 跳过: {fn}")   # 不落盘，避免污染产物目录
     return {"prompt_id": prompt_id, "outputs": outputs, "saved": saved}
 
 
