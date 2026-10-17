@@ -331,10 +331,10 @@ def _restart_backend():
 
 
 # ============================================================
-# 更新检测（v0.5.0）：GitHub 最新 Release vs 当前版本
+# 更新检测（v0.5.1）：GitHub 最新 Release vs 当前版本
 # 免 API 方案：latest 重定向 → 解析 tag，绕开 GitHub API 限流(60次/h)
 # ============================================================
-CUR_VERSION = "0.5.0"          # 当前版本号（build.gradle versionName）
+CUR_VERSION = "0.5.2"          # 当前版本号（build.gradle versionName）
 _UPDATE_CACHE = {"ts": 0, "data": None}   # 15 分钟缓存，避免频繁打外网
 
 def _version_tuple(v):
@@ -434,7 +434,7 @@ def _inject_api_key(mod):
         return False
     mods = [mod]
     # 无论传哪个模块，都把所有底层脚本模块一起注入，避免跨模块调用漏注入
-    for mname in ("rh_zimage_api", "rh_krea2_nsfw", "rh_h3_flf_api", "rh_workflow_api"):
+    for mname in ("rh_zimage_api", "rh_krea2_nsfw", "rh_h3_flf_api", "rh_workflow_api", "rh_wan22", "rh_reactor"):
         try:
             m = importlib.import_module(mname)
             if m not in mods:
@@ -537,6 +537,7 @@ REGISTRY = {
         "desc": "参考图换人/换姿势（选图=图生图）/ 纯提示词生图（不选图=文生图）。主力方案",
         "module": "rh_zimage_api", "mode": "i2i",
         "params": [
+            {"k": "ref_image", "label": "参考图", "type": "ref", "accepts": "image", "def": "", "help": "不选 = 文生图"},
             {"k": "resolution", "label": "分辨率", "type": "select", "options": [
                 {"v": "768x1368", "label": "768×1368（竖屏 9:16 · 省币）"},
                 {"v": "1080x1920", "label": "1080×1920（竖屏 9:16 · 推荐）"},
@@ -588,6 +589,7 @@ REGISTRY = {
         "desc": "Krea2 + 参考图注入 (LoadImage→VAEEncode)，保持角色改姿势",
         "module": "rh_krea2_nsfw", "mode": "i2i",
         "params": [
+            {"k": "ref_image", "label": "参考图", "type": "ref", "accepts": "image", "def": "", "help": "不选 = 文生图"},
             {"k": "model", "label": "底模", "type": "select", "options": [{"v": "gptruth", "label": "GPTruth（写实向，推荐）"}, {"v": "nsfw", "label": "NSFW V4（能出裸体）"}, {"v": "redcraft23", "label": "RedCraft23（工作流默认）"}, {"v": "redmix", "label": "RedMix（写实混合）"}, {"v": "moody", "label": "Moody（氛围向）"}, {"v": "muse", "label": "Muse（艺术向）"}, {"v": "turbo", "label": "Turbo（加速模型，快但略降质）"}], "def": "gptruth"},
             {"k": "ratio", "label": "比例", "type": "select", "options": ["9:16", "16:9", "1:1", "2:3", "3:2", "3:4", "4:3", "21:9"], "def": "9:16"},
             {"k": "mp", "label": "分辨率", "type": "select", "options": [{"v": "0.5", "label": "0.5 MP（低清快出）"}, {"v": "1.0", "label": "1 MP（标清）"}, {"v": "2.0", "label": "2 MP ≈1080×1920（推荐）"}, {"v": "4.0", "label": "4 MP（2K级）"}, {"v": "8.0", "label": "8 MP（超高清）"}], "def": "2.0", "help": "2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},
@@ -611,8 +613,8 @@ REGISTRY = {
         "desc": "首帧图(→尾帧图) → 视频。支持单段/续接，输出 mp4",
         "module": "rh_h3_flf_api", "mode": "video",
         "params": [
-            {"k": "first_ref", "label": "首帧图", "type": "ref", "def": ""},
-            {"k": "last_ref", "label": "尾帧图(可选)", "type": "ref", "def": ""},
+            {"k": "first_ref", "label": "首帧图", "type": "ref", "accepts": "image", "def": ""},
+            {"k": "last_ref", "label": "尾帧图(可选)", "type": "ref", "accepts": "image", "def": ""},
             {"k": "ratio", "label": "比例", "type": "select", "options": ["9:16 (Portrait Widescreen)", "16:9 (Widescreen)", "1:1 (Square)", "3:4 (Portrait Standard)", "4:3 (Standard)", "21:9 (Ultrawide)"], "def": "9:16 (Portrait Widescreen)"},
             {"k": "megapixels", "label": "分辨率", "type": "select", "options": [{"v": "0.25", "label": "0.25 MP（低清快出）"}, {"v": "0.4", "label": "0.4 MP（标清）"}, {"v": "0.6", "label": "0.6 MP（推荐）"}, {"v": "0.9", "label": "0.9 MP（高清）"}, {"v": "1.2", "label": "1.2 MP（超清）"}], "def": "0.6"},
             {"k": "duration", "label": "时长(秒)", "type": "float", "def": 5, "help": "视频长度，越长越贵"},
@@ -627,7 +629,7 @@ REGISTRY = {
         "desc": "全能力：文生视频 / 参考图/视频/音频 omni，输出 mp4",
         "module": "rh_workflow_api", "mode": "video",
         "params": [
-            {"k": "ref_image", "label": "参考图(可选)", "type": "ref", "def": ""},
+            {"k": "ref_image", "label": "参考图(可选)", "type": "ref", "accepts": "image", "def": ""},
             {"k": "mode", "label": "模式", "type": "select", "options": [{"v": "", "label": "自动(有参考图→omni，无→文生视频)"}, {"v": "text_to_video", "label": "文生视频 T2V"}, {"v": "omni_reference", "label": "参考图驱动 omni"}], "def": ""},
             {"k": "ratio", "label": "比例", "type": "select", "options": ["9:16 (Portrait Widescreen)", "16:9 (Widescreen)", "1:1 (Square)", "3:4 (Portrait Standard)", "4:3 (Standard)", "21:9 (Ultrawide)"], "def": "9:16 (Portrait Widescreen)"},
             {"k": "megapixels", "label": "分辨率", "type": "select", "options": [{"v": "0.25", "label": "0.25 MP（低清快出）"}, {"v": "0.4", "label": "0.4 MP（标清）"}, {"v": "0.6", "label": "0.6 MP（推荐）"}, {"v": "0.9", "label": "0.9 MP（高清）"}, {"v": "1.2", "label": "1.2 MP（超清）"}], "def": "0.4"},
@@ -638,7 +640,52 @@ REGISTRY = {
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
         ],
     },
-    "illustrious_t2i": {
+     "reactor_swap": {
+        "name": "ReActor 只换脸（视频）",
+        "desc": "像素级换脸：只替换源视频里的人脸，身体/动作/服装/背景原样保留。输出自动贴合源视频分辨率。⚠️ 脸型差异过大会变形；要「连人带货一起换」请用 Wan Animate",
+        "module": "rh_reactor", "mode": "video",
+        "params": [
+            {"k": "source_face", "label": "参考脸（要换上去的脸）", "type": "ref", "accepts": "image", "def": "", "help": "提供人脸的图，建议正面清晰照"},
+            {"k": "src_video", "label": "源视频（被换脸）", "type": "ref", "accepts": "video", "def": "", "help": "身体/动作/服装/背景来自它，输出分辨率自动跟随源视频"},
+            {"k": "max_side", "label": "最长边上限", "type": "select", "options": [
+                {"v": "512", "label": "512（最快，低清）"},
+                {"v": "768", "label": "768（平衡）"},
+                {"v": "1024", "label": "1024（默认 · 推荐）"},
+                {"v": "1280", "label": "1280（超清 · 慢）"},
+            ], "def": "1024", "help": "源视频等比缩放到此上限（保持原始宽高比），防止爆显存"},
+            {"k": "compare", "label": "额外输出对比版（右拼源视频）", "type": "checkbox", "def": False},
+            {"k": "face_restore", "label": "脸部修复强度", "type": "float", "def": 0.4, "help": "GFPGAN 修复，0=不修复（更原始）/ 0.4=默认 / 1=磨皮最重", "group": "advanced"},
+            {"k": "interp", "label": "RIFE 补帧倍率", "type": "select", "options": [
+                {"v": "2", "label": "2×（默认 · 推荐）"},
+                {"v": "4", "label": "4×（最顺滑，最慢）"},
+                {"v": "1", "label": "1×（不补帧 · 仅调试用）"},
+            ], "def": "2", "help": "⚠️ 本工作流是「关键帧换脸 + RIFE 补帧」：只挑帧换脸，其余靠补帧过渡。关闭补帧（1×）画面会拖慢/顿挫，默认保持 2× 即可"},
+        ],
+    },
+    "wan22_animate": {
+         "name": "动作迁移 · Wan Animate 2.2",
+         "desc": "生成式角色替换：参考图定身份（脸/发型/服装），源视频定动作。⚠️ 会连同服装/背景一起重画；要「只换脸」请用 ReActor",
+         "module": "rh_wan22", "mode": "video",
+         "params": [
+             {"k": "ref_image", "label": "参考图（身份）", "type": "ref", "accepts": "image", "def": "", "help": "决定生成人物的长相/形象"},
+             {"k": "ref_video", "label": "源视频（动作）", "type": "ref", "accepts": "video", "def": "", "help": "提供动作/姿态（只列视频素材）"},
+             {"k": "resolution", "label": "分辨率（宽×高）", "type": "select", "options": [
+                {"v": "480x832", "label": "480×832（竖屏 · 推荐，实测通过）"},
+                {"v": "544x960", "label": "544×960（竖屏 · 实测通过，稍慢）"},
+                {"v": "576x1024", "label": "576×1024（竖屏 · 高清）"},
+                {"v": "640x640", "label": "640×640（方形）"},
+                {"v": "768x768", "label": "768×768（方形 · 高清）"},
+                {"v": "832x480", "label": "832×480（横屏）"},
+                {"v": "960x544", "label": "960×544（横屏 · 高清）"},
+                {"v": "1024x576", "label": "1024×576（横屏 · 超清）"},
+            ], "def": "480x832", "help": "实测：720×1280 会显存溢出(OOM)失败，更高的竖屏档位请自行试跑"},
+             {"k": "face_enhance", "label": "人脸增强", "type": "checkbox", "def": True, "help": "启用真实人脸检测（关闭则走黑图，相似度下降）"},
+             {"k": "compare", "label": "额外输出对比条（含流程拼接）", "type": "checkbox", "def": False},
+             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
+             {"k": "steps", "label": "步数", "type": "int", "def": 6, "help": "默认 6（工作流原值）", "group": "advanced"},
+         ],
+     },
+     "illustrious_t2i": {
         "name": "Illustrious 二次元文生图 (T2I)",
         "desc": "WAI-illustrious-SDXL 二次元底模（自带动漫画风）。可选加 Smooth_Booster 画质增强 / Cunnystyle 插画微调。半写实 CG 动漫风",
         "module": "rh_illustrious_api", "mode": "t2i",
@@ -670,7 +717,7 @@ def _list_refs():
     if not REFS_DIR.exists():
         return []
     return sorted([p.name for p in REFS_DIR.iterdir()
-                   if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")])
+                   if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".webm", ".mov")])
 
 
 def _list_outputs():
@@ -807,6 +854,112 @@ def _run_task(task_id, script_key, params):
                 _inject_api_key(_Z)
             except Exception:
                 pass
+        if script_key == "wan22_animate":
+            try:
+                import rh_wan22 as _W
+                _inject_api_key(_W)
+            except Exception:
+                pass
+        if script_key == "reactor_swap":
+            try:
+                import rh_reactor as _RA
+                _inject_api_key(_RA)
+            except Exception:
+                pass
+        if script_key == "reactor_swap":
+            # ReActor 只换脸：参考脸（要换上去）+ 源视频（被换脸）→ 像素级换脸
+            face_ref = params.get("source_face") or ""
+            video_ref = params.get("src_video") or ""
+            face_path = _resolve_ref_path(face_ref)
+            video_path = _resolve_ref_path(video_ref)
+            if not face_path:
+                raise RuntimeError("需要参考脸图片（素材库选一张正面清晰照）")
+            if not video_path:
+                raise RuntimeError("需要源视频（从素材库或出图产物选一段）")
+            resolution = str(params.get("resolution") or "").strip()
+            max_side = 1024
+            try:
+                max_side = int(params.get("max_side") or 1024)
+            except (TypeError, ValueError):
+                max_side = 1024
+            compare = str(params.get("compare", "")).lower() in ("true", "1", "on")
+            try:
+                interp = int(params.get("interp", 2))
+            except (TypeError, ValueError):
+                interp = 2
+            try:
+                face_restore = float(params.get("face_restore", 0.4))
+            except (TypeError, ValueError):
+                face_restore = 0.4
+            with _lock:
+                TASKS[task_id]["status"] = "submitting"
+            res = mod.run(
+                source_face=face_path,
+                src_video=video_path,
+                max_side=max_side,
+                interp=interp,
+                compare=compare,
+                face_restore=face_restore,
+                download_dir=str(OUT_DIR),
+                on_submit=_on_submit,
+            )
+            saved = res.get("saved", []) or []
+            # 产物可能有多个（compare 时），image 优先取 mp4
+            _img = next((f for f in saved if str(f).lower().endswith((".mp4", ".webm"))), saved[0] if saved else None)
+            with _lock:
+                TASKS[task_id].update({"status": "done", "image": _img,
+                                       "files": saved, "pid": res.get("prompt_id"), "error": None})
+            _save_state()
+            return
+        if script_key == "wan22_animate":
+            # Wan Animate 2.2 动作迁移：参考图（身份）+ 源视频（动作）→ 生成式角色替换
+            ref_ref = params.get("ref_image") or ""
+            video_ref = params.get("ref_video") or ""
+            ref_path = _resolve_ref_path(ref_ref)
+            video_path = _resolve_ref_path(video_ref)
+            if not video_path:
+                raise RuntimeError("动作迁移需要源视频（从出图产物选一段）")
+            if not ref_path:
+                raise RuntimeError("动作迁移需要参考图（素材库选一张）")
+            # 分辨率 "宽x高"
+            w, h = 480, 832
+            res_s = str(params.get("resolution") or "").strip().lower()
+            if "x" in res_s:
+                try:
+                    w, h = (int(x) for x in res_s.split("x")[:2])
+                except ValueError:
+                    pass
+            compare = str(params.get("compare", "")).lower() in ("true", "1", "on")
+            face_enhance = str(params.get("face_enhance", "true")).lower() in ("true", "1", "on")
+            seed_s = str(params.get("seed") or "").strip()
+            try:
+                seed = int(seed_s) if seed_s else None
+            except ValueError:
+                seed = None
+            try:
+                steps = int(params.get("steps", 6))
+            except (TypeError, ValueError):
+                steps = 6
+            with _lock:
+                TASKS[task_id]["status"] = "submitting"
+            res = mod.run(
+                ref_image_path=ref_path,
+                ref_video_path=video_path,
+                width=w, height=h,
+                prompt_text=(params.get("prompt") or "").strip() or None,
+                face_enhance=face_enhance,
+                compare=compare,
+                seed=seed, steps=steps,
+                download_dir=str(OUT_DIR),
+                on_submit=_on_submit,
+            )
+            videos = res.get("videos", []) or []
+            with _lock:
+                TASKS[task_id].update({"status": "done", "image": videos[0] if videos else None,
+                                       "files": videos, "pid": res.get("prompt_id"), "error": None})
+            _save_state()
+            return
+
         prompt = params.get("prompt", "")
 
         if script_key in ("h3_flf_video", "h3_omni_video"):
@@ -1316,8 +1469,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _send_file(self, fp):
-        """按扩展名推断 MIME 发一个文件（带 CORS）"""
-        data = fp.read_bytes()
+        """按扩展名推断 MIME 发一个文件（带 CORS）。
+        支持 Range（206）：视频缩略图/拖动进度依赖它，否则每次都全量下载。"""
         low = fp.name.lower()
         if low.endswith(".mp4"):
             ctype = "video/mp4"
@@ -1331,12 +1484,39 @@ class Handler(BaseHTTPRequestHandler):
             ctype = "image/webp"
         else:
             ctype = "application/octet-stream"
-        self.send_response(200)
+        data = fp.read_bytes()
+        rng = self.headers.get("Range")
+        start, end = 0, len(data)
+        if rng:
+            try:
+                unit, _, spec = rng.strip().partition("=")
+                if unit.lower() == "bytes":
+                    s, _, e = spec.strip().partition("-")
+                    if s:
+                        start = int(s)
+                        end = int(e) + 1 if e else len(data)
+                    elif e:                     # bytes=-N（尾部 N 字节）
+                        start = max(0, len(data) - int(e))
+                    start = max(0, min(start, len(data)))
+                    end = max(start, min(end, len(data)))
+            except Exception:
+                start, end = 0, len(data)
+        chunk = data[start:end]
+        if rng and start < len(data):
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end - 1}/{len(data)}")
+        elif rng:
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{len(data)}")
+        else:
+            self.send_response(200)
         self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(len(chunk)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges")
         self.end_headers()
-        self.wfile.write(data)
+        self.wfile.write(chunk)
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -1394,7 +1574,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _update_check(force=force))
         elif path == "/api/tasks":
             with _lock:
-                t = {k: {kk: vv for kk, vv in v.items() if kk != "trace"} for k, v in TASKS.items()}
+                t = {}
+                for _k, _v in TASKS.items():
+                    e = {kk: vv for kk, vv in _v.items() if kk != "trace"}
+                    # 磁盘才是事实来源：产物可能已被删除（素材管理/外部清理），
+                    # 不校验会让前端拿着失效文件名渲染成破图占位。
+                    files = [f for f in (e.get("files") or [])
+                             if f and (OUT_DIR / os.path.basename(str(f))).exists()]
+                    img = e.get("image")
+                    if img and not (OUT_DIR / os.path.basename(str(img))).exists():
+                        img = None
+                    e["files"] = files
+                    e["image"] = img or (files[0] if files else None)
+                    t[_k] = e
             self._send(200, {"tasks": t})
         elif path == "/api/latest_image":
             # 最近一张完成的出图（status=done 且 ts 最新，文件必须真实落盘）
@@ -1547,8 +1739,17 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(400, {"error": "no file"})
                     return
                 REFS_DIR.mkdir(parents=True, exist_ok=True)
-                (REFS_DIR / fname).write_bytes(content)
-                self._send(200, {"ok": True, "name": fname})
+                # 同名防覆盖：IMG_0001.jpg → IMG_0001 (2).jpg
+                stem, dot, ext = fname.rpartition(".")
+                if not dot:                      # 无扩展名
+                    stem, ext = fname, ""
+                cand = f"{stem}.{ext}" if ext else stem
+                n = 1
+                while (REFS_DIR / cand).exists():
+                    n += 1
+                    cand = f"{stem} ({n}).{ext}" if ext else f"{stem} ({n})"
+                (REFS_DIR / cand).write_bytes(content)
+                self._send(200, {"ok": True, "name": cand})
             except Exception as e:
                 self._send(500, {"error": str(e)})
         elif path == "/api/refs/delete":
