@@ -2,9 +2,9 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<meta name="version" content="v0.5.0">
+<meta name="version" content="v0.5.2">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>洛宝跑图台 v0.5.0 · RunningHub WebUI</title>
+<title>洛宝跑图台 v0.5.2 · RunningHub WebUI</title>
 <style>
 :root{
   --bg:#0f1115;--card:#171a21;--line:#262b36;--tx:#e6e9ef;--dim:#8b93a7;--acc:#e0a03c;--ok:#4caf7d;--err:#e0564c;
@@ -113,16 +113,53 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 #previewBox img,#previewBox video{max-width:88vw;max-height:70vh;display:block;margin:0 auto}
 #previewBox .pvinfo{padding:10px 14px;font-size:11px;color:var(--dim);max-height:16vh;overflow-y:auto}
 #previewBox .pvclose{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.6);border:none;color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;z-index:2}
+/* ===== 素材库浮层 ===== */
+/* 注意：#pickerBox/#pickerMask 用的是内联 style="display:none"，
+   必须用 .on 规则（非 !important 不够，内联优先级更高）才能显示。 */
+#pickerMask.on{display:block !important}
+#pickerBox.on{display:flex !important}
+/* ===== 素材槽位卡片（④ 参数里的 ref 参数） ===== */
+.slot{display:flex;gap:10px;align-items:center;border:1.5px dashed var(--line);border-radius:10px;padding:8px 10px;margin:6px 0;cursor:pointer;transition:.15s;background:rgba(255,255,255,.02);position:relative}
+.slot:hover{border-color:var(--acc);background:rgba(224,160,60,.06)}
+.slot.filled{border-style:solid;border-color:var(--line)}
+.slot.filled:hover{border-color:var(--err);background:rgba(224,86,76,.06)}
+.slot .slotthumb{width:44px;height:56px;border-radius:6px;overflow:hidden;background:#0d0f13;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--dim)}
+.slot .slotthumb img,.slot .slotthumb video{width:100%;height:100%;object-fit:cover;display:block}
+.slot .slotthumb .vbadge{position:absolute}
+.slot .slotmeta{flex:1;min-width:0}
+.slot .slotlbl{font-size:12px;font-weight:600;margin-bottom:2px}
+.slot .slottag{font-size:9px;background:#2a3140;color:var(--dim);padding:1px 5px;border-radius:4px;margin-left:4px;font-weight:400}
+.slot .slotfn{font-size:11px;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slot .slotfn.empty{color:#5a6273}
+.slot .slothint{font-size:10px;color:var(--dim);opacity:.85;margin-top:2px}
+.slot .slotact{font-size:16px;color:var(--dim);flex-shrink:0;width:22px;text-align:center}
+.slot.filled:hover .slotact{color:var(--err)}
 /* ===== 参考图缩略图网格 ===== */
 .refgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:4px}
+/* 分页器：网格上方的独立行（不再 grid-column 抢格子） */
+.refpager{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px;margin:8px 0 6px;font-size:11px;color:var(--dim)}
+.refpager:empty{display:none}
+.refpager .rpinfo{opacity:.75;margin-left:2px}
+.refpager .rpnum{min-width:52px;text-align:center;color:var(--acc);font-weight:700;font-size:12px}
+.refpager .rpbtn{cursor:pointer;user-select:none;padding:3px 11px;border:1px solid var(--line);border-radius:6px;background:#0d0f13;transition:.12s;line-height:18px;font-size:13px}
+.refpager .rpbtn:hover{border-color:var(--acc);color:var(--acc)}
+.refpager .rpbtn.off{opacity:.32;cursor:default;pointer-events:none}
+.refgrid .hint{grid-column:1/-1}
 .refgrid .rg{position:relative;border:2px solid var(--line);border-radius:8px;overflow:hidden;cursor:pointer;aspect-ratio:3/4;background:#0d0f13;transition:.15s}
 .refgrid .rg:hover{border-color:var(--acc)}
 .refgrid .rg.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
 .refgrid .rg img{width:100%;height:100%;object-fit:cover;display:block}
-.refgrid .rg .x{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.65);color:#fff;border:none;border-radius:50%;width:18px;height:18px;line-height:16px;font-size:11px;text-align:center;cursor:pointer;display:none}
-.refgrid .rg.sel .x{display:block}
-.refgrid .rg .del{position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,.65);color:#fff;border:none;border-radius:4px;width:20px;height:20px;line-height:18px;font-size:12px;text-align:center;cursor:pointer;display:none}
-.refgrid .rg:hover .del{display:block}
+.refgrid .rg video{width:100%;height:100%;object-fit:cover;display:block}
+.refgrid .rg video:not(.ready){background:linear-gradient(135deg,#15181d,#1e2229)}
+.refgrid .rg video.dead{opacity:.35}
+.refgrid .rg .vbadge{position:absolute;top:2px;left:2px;background:rgba(0,0,0,.65);color:#fff;font-size:9px;padding:0 4px;border-radius:3px;pointer-events:none;line-height:14px}
+.refpick .rp video{width:100%;height:100%;object-fit:cover;display:block}
+.refpick .rp video:not(.ready){background:linear-gradient(135deg,#15181d,#1e2229)}
+.refpick .rp video.dead{opacity:.35}
+.refpick .rp .vbadge{position:absolute;top:1px;left:1px;background:rgba(0,0,0,.65);color:#fff;font-size:8px;padding:0 3px;border-radius:3px;pointer-events:none;line-height:12px}
+/* 删除/取消按钮：常驻显示（触屏无 hover，:hover 方案在手机上永远点不到） */
+.refgrid .rg .x{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.7);color:#fff;border:none;border-radius:50%;width:20px;height:20px;line-height:18px;font-size:11px;text-align:center;cursor:pointer;z-index:3}
+.refgrid .rg .del{position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,.7);color:#fff;border:none;border-radius:4px;width:22px;height:22px;line-height:20px;font-size:12px;text-align:center;cursor:pointer;z-index:3}
 .refgrid .rg .del:hover{background:var(--err)}
 /* 参考图 tab */
 .reftabs{display:flex;gap:6px;margin-bottom:10px}
@@ -168,10 +205,13 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 .lora-line .lora-title{font-weight:500;font-size:13px;cursor:pointer;user-select:none}
 .lora-line .lora-strength{width:58px;margin-left:auto;text-align:center;border:1px solid var(--line);background:#0d0f13;color:var(--tx);border-radius:6px;padding:2px 4px;font-size:13px;height:auto}
 .lora-line .lora-desc{width:100%;padding-left:28px;color:var(--dim);font-size:11px;line-height:1.5}
+/* 普通开关（checkbox）：复用 LoRA 行样式，右侧用「开/关」文字态代替强度输入框 */
+.lora-line .chk-state{margin-left:auto;font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:5px;padding:1px 7px;background:#0d0f13}
+.lora-line input:checked ~ .chk-state{color:var(--acc);border-color:var(--acc)}
 </style>
 </head>
 <body>
-<h1>洛宝<span>跑图台</span> <span class="ver">v0.5.0</span></h1>
+<h1>洛宝<span>跑图台</span> <span class="ver">v0.5.2</span></h1>
 <div class="sub">RunningHub 本地统一出图 · Zimage / Krea2 · 任务异步 · 出图直显 <span id="verInfo" style="margin-left:8px;color:var(--acc)"></span>
   <button onclick="reconnectBackend()" style="margin-left:10px;background:#1f2530;border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:700">🔌 连接后端</button>
 </div>
@@ -334,23 +374,11 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
   <div class="card">
     <h2>① 脚本</h2>
     <div id="scriptList"></div>
-<div class="card">
-    <h2>② 参考图（图生图用）</h2>
-    <div class="reftabs">
-      <button class="rftab active" data-mode="refs" onclick="setRefTab('refs')">素材库</button>
-      <button class="rftab" data-mode="outs" onclick="setRefTab('outs')">出图产物</button>
-    </div>
-    <div id="refGrid" class="refgrid"></div>
-    <div style="margin-top:10px" id="refSelected"><span class="hint">未选择（= 文生图）</span></div>
-    <div class="hint" style="margin-top:10px">上传新参考图：</div>
-    <div class="uploadcard" id="uploadCard" onclick="$('refFile').click()">
-      <div class="uc-icon">🖼️</div>
-      <div class="uc-title">点击选择图片</div>
-      <div class="uc-sub" id="uploadSub">JPG / PNG / WEBP</div>
-      <button class="uc-btn" id="uploadBtn" onclick="event.stopPropagation();uploadRef()">上传</button>
-    </div>
-    <input type="file" id="refFile" accept="image/*" style="display:none" onchange="onRefPicked()">
   </div>
+<div class="card">
+    <h2>② 素材库</h2>
+    <div style="font-size:11px;color:var(--dim);margin-bottom:8px">浏览 / 上传 / 删除。具体「哪个脚本用哪个素材」在下方 ④ 参数的槽位里选。</div>
+    <button class="btn" style="margin:0;width:100%" onclick="openPicker(null,null)">📁 打开素材库（<span id="refTotal">0</span>）</button>
   </div>
 <div class="card">
     <h2>③ 提示词</h2>
@@ -369,11 +397,35 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 </div>
 </div>
 </div>
+<!-- ===== 素材库浮层（槽位选择 / 纯浏览） ===== -->
+<div id="pickerMask" onclick="closePicker()" style="position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:98;display:none"></div>
+<div id="pickerBox" style="position:fixed;left:0;right:0;bottom:0;top:10%;background:var(--card);border:1px solid var(--line);border-radius:16px 16px 0 0;z-index:99;display:none;flex-direction:column;max-width:560px;margin:0 auto;box-shadow:0 -8px 50px rgba(0,0,0,.6)">
+  <div style="padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px">
+    <h3 id="pickerTitle" style="margin:0;font-size:13px;color:var(--acc)">素材库</h3>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span id="pickerHint" style="font-size:10px;color:var(--dim)"></span>
+      <button onclick="closePicker()" style="background:none;border:none;color:var(--dim);font-size:16px;cursor:pointer;padding:0 4px">✕</button>
+    </div>
+  </div>
+  <div class="reftabs">
+    <button class="rftab active" data-mode="refs" onclick="setRefTab('refs')">素材图</button>
+    <button class="rftab" data-mode="vids" onclick="setRefTab('vids')">参考视频</button>
+    <button class="rftab" data-mode="outs" onclick="setRefTab('outs')">出图产物</button>
+  </div>
+  <div id="refPager" class="refpager"></div>
+  <div id="refGrid" class="refgrid" style="overflow-y:auto;flex:1;padding:0 14px 8px;align-content:start"></div>
+  <div style="padding:10px 14px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center">
+    <button class="btn" id="uploadBtn" style="margin:0;flex:1;padding:7px 10px;font-size:12px" onclick="$('refFile').click()">⬆ 上传新素材</button>
+    <span id="uploadSub" style="font-size:10px;color:var(--dim);flex:2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">JPG / PNG / MP4</span>
+  </div>
+</div>
+<input type="file" id="refFile" accept="image/*,video/*" style="display:none" onchange="onRefPicked()">
+
 <div id="toast"></div>
 
 <script>
-const EMBEDDED_SCRIPTS={"zimage_i2i":{"name":"Zimage 图生图/文生图 (I2I+T2I)","desc":"参考图换人/换姿势（选图=图生图）/ 纯提示词生图（不选图=文生图）。主力方案","module":"rh_zimage_api","mode":"i2i","params":[{"k":"resolution","label":"分辨率","type":"select","options":[{"v":"768x1368","label":"768×1368（竖屏 9:16 · 省币）"},{"v":"1080x1920","label":"1080×1920（竖屏 9:16 · 推荐）"},{"v":"1242x2688","label":"1242×2688（竖屏 9:16 · 高清）"},{"v":"1024x1024","label":"1024×1024（方形 1:1）"},{"v":"1368x768","label":"1368×768（横屏 16:9 · 省币）"},{"v":"1920x1080","label":"1920×1080（横屏 16:9 · 高清）"}],"def":"1080x1920"},{"k":"steps","label":"步数","type":"int","def":12},{"k":"denoise","label":"重绘强度","type":"float","def":0.7,"help":"0.5-0.6锁姿势 / 0.7平衡 / 0.85+大幅改写"},{"k":"lora","label":"LoRA","type":"select","options":[{"v":"none","label":"无"},{"v":"charm","label":"charm · 风情万种人像（细节/锐度最高，欧美骨相+重影调）"},{"v":"nofilter","label":"nofilter · 无滤真实（去AI味/素人感，肤质真实，会轻微改脸）"},{"v":"flowdpo","label":"flowdpo · 真实感光影（治扁平/过曝/塑料感）"},{"v":"model","label":"model · 全能模特展示（强度0.45/步数10）"},{"v":"peach","label":"peach · 蜜桃臀加强（⚠会改脸型，仅限不露脸构图）"},{"v":"zanime","label":"zanime · 二次元动漫化（真人转二次元，选图生图用）"}],"def":"none"},{"k":"lora_strength","label":"LoRA强度","type":"float","def":0.7,"help":"仅 LoRA≠none 时生效"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]},"krea2_t2i":{"name":"Krea2 文生图 (T2I)","desc":"纯文生图，Krea2 底模，支持权重语法 (词:1.5)","module":"rh_krea2_nsfw","mode":"t2i","params":[{"k":"model","label":"底模","type":"select","options":[{"v":"gptruth","label":"GPTruth（写实向，推荐）"},{"v":"nsfw","label":"NSFW V4（能出裸体）"},{"v":"redcraft23","label":"RedCraft23（工作流默认）"},{"v":"redmix","label":"RedMix（写实混合）"},{"v":"moody","label":"Moody（氛围向）"},{"v":"muse","label":"Muse（艺术向）"},{"v":"turbo","label":"Turbo（加速模型，快但略降质）"}],"def":"gptruth"},{"k":"ratio","label":"比例","type":"select","options":["9:16","16:9","1:1","2:3","3:2","3:4","4:3","21:9"],"def":"9:16"},{"k":"mp","label":"分辨率","type":"select","options":[{"v":"0.5","label":"0.5 MP（低清快出）"},{"v":"1.0","label":"1 MP（标清）"},{"v":"2.0","label":"2 MP ≈1080×1920（推荐）"},{"v":"4.0","label":"4 MP（2K级）"},{"v":"8.0","label":"8 MP（超高清）"}],"def":"2.0","help":"2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},{"k":"steps","label":"步数","type":"int","def":12},{"k":"style","label":"画风LoRA · 风情万种","type":"lora","def":true,"def_strength":0.5,"help":"风情万种画风，整体氛围色调"},{"k":"realism","label":"写实LoRA · 真实感引擎","type":"lora","def":true,"def_strength":0.6,"help":"皮肤真实质感，去AI感"},{"k":"body","label":"身材LoRA · 天魔","type":"lora","def":true,"def_strength":0.3,"help":"身材曲线强化（丰胸细腰翘臀）"},{"k":"prompt_weight","label":"PromptWeight","type":"float","def":1.0,"help":"0=禁用；>0 启用 (词:1.5) 权重语法"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"},{"k":"cfg","label":"CFG","type":"float","def":1.0,"help":"Krea2 建议 1.0","group":"advanced"},{"k":"sampler","label":"采样器","type":"select","options":["euler","euler_ancestral","dpmpp_2m","dpmpp_2m_sde","dpmpp_sde","uni_pc"],"def":"euler","group":"advanced"},{"k":"scheduler","label":"调度器","type":"select","options":["simple","normal","karras","sgm_uniform"],"def":"simple","group":"advanced"},{"k":"shift","label":"AuraFlow shift","type":"float","def":3.0,"group":"advanced"},{"k":"rebalance","label":"Rebalance","type":"select","options":["balanced","detail","subtle","uniform","custom"],"def":"detail","group":"advanced"},{"k":"vae","label":"VAE","type":"select","options":["default","hdr","sharp","hd"],"def":"default","help":"hdr 磨皮严重，default 保细节","group":"advanced"},{"k":"out_format","label":"输出格式","type":"select","options":["png","jpg"],"def":"png","group":"advanced"}]},"krea2_i2i":{"name":"Krea2 图生图 (I2I)","desc":"Krea2 + 参考图注入 (LoadImage→VAEEncode)，保持角色改姿势","module":"rh_krea2_nsfw","mode":"i2i","params":[{"k":"model","label":"底模","type":"select","options":[{"v":"gptruth","label":"GPTruth（写实向，推荐）"},{"v":"nsfw","label":"NSFW V4（能出裸体）"},{"v":"redcraft23","label":"RedCraft23（工作流默认）"},{"v":"redmix","label":"RedMix（写实混合）"},{"v":"moody","label":"Moody（氛围向）"},{"v":"muse","label":"Muse（艺术向）"},{"v":"turbo","label":"Turbo（加速模型，快但略降质）"}],"def":"gptruth"},{"k":"ratio","label":"比例","type":"select","options":["9:16","16:9","1:1","2:3","3:2","3:4","4:3","21:9"],"def":"9:16"},{"k":"mp","label":"分辨率","type":"select","options":[{"v":"0.5","label":"0.5 MP（低清快出）"},{"v":"1.0","label":"1 MP（标清）"},{"v":"2.0","label":"2 MP ≈1080×1920（推荐）"},{"v":"4.0","label":"4 MP（2K级）"},{"v":"8.0","label":"8 MP（超高清）"}],"def":"2.0","help":"2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},{"k":"steps","label":"步数","type":"int","def":12},{"k":"denoise","label":"重绘强度","type":"float","def":0.65},{"k":"style","label":"画风LoRA · 风情万种","type":"lora","def":true,"def_strength":0.5,"help":"风情万种画风，整体氛围色调"},{"k":"realism","label":"写实LoRA · 真实感引擎","type":"lora","def":true,"def_strength":0.6,"help":"皮肤真实质感，去AI感"},{"k":"body","label":"身材LoRA · 天魔","type":"lora","def":true,"def_strength":0.3,"help":"身材曲线强化（丰胸细腰翘臀）"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"},{"k":"cfg","label":"CFG","type":"float","def":1.0,"help":"Krea2 建议 1.0","group":"advanced"},{"k":"sampler","label":"采样器","type":"select","options":["euler","euler_ancestral","dpmpp_2m","dpmpp_2m_sde","dpmpp_sde","uni_pc"],"def":"euler","group":"advanced"},{"k":"scheduler","label":"调度器","type":"select","options":["simple","normal","karras","sgm_uniform"],"def":"simple","group":"advanced"},{"k":"shift","label":"AuraFlow shift","type":"float","def":3.0,"group":"advanced"},{"k":"rebalance","label":"Rebalance","type":"select","options":["balanced","detail","subtle","uniform","custom"],"def":"detail","group":"advanced"},{"k":"vae","label":"VAE","type":"select","options":["default","hdr","sharp","hd"],"def":"default","help":"hdr 磨皮严重，default 保细节","group":"advanced"},{"k":"out_format","label":"输出格式","type":"select","options":["png","jpg"],"def":"png","group":"advanced"}]},"h3_flf_video":{"name":"MiniMaxH3 首尾帧视频 (I2V)","desc":"首帧图(→尾帧图) → 视频。支持单段/续接，输出 mp4","module":"rh_h3_flf_api","mode":"video","params":[{"k":"first_ref","label":"首帧图","type":"ref","def":""},{"k":"last_ref","label":"尾帧图(可选)","type":"ref","def":""},{"k":"ratio","label":"比例","type":"select","options":["9:16 (Portrait Widescreen)","16:9 (Widescreen)","1:1 (Square)","3:4 (Portrait Standard)","4:3 (Standard)","21:9 (Ultrawide)"],"def":"9:16 (Portrait Widescreen)"},{"k":"megapixels","label":"分辨率","type":"select","options":[{"v":"0.25","label":"0.25 MP（低清快出）"},{"v":"0.4","label":"0.4 MP（标清）"},{"v":"0.6","label":"0.6 MP（推荐）"},{"v":"0.9","label":"0.9 MP（高清）"},{"v":"1.2","label":"1.2 MP（超清）"}],"def":"0.6"},{"k":"duration","label":"时长(秒)","type":"float","def":5,"help":"视频长度，越长越贵"},{"k":"steps","label":"步数","type":"int","def":8},{"k":"lora","label":"LoRA","type":"select","options":["none","synthpussy","realface","cinematic","physics","nokia"],"def":"none"},{"k":"lora_strength","label":"LoRA强度","type":"float","def":0.9,"help":"仅 LoRA≠none 时生效","group":"advanced"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]},"h3_omni_video":{"name":"MiniMaxH3 全能视频 (T2V/参考)","desc":"全能力：文生视频 / 参考图/视频/音频 omni，输出 mp4","module":"rh_workflow_api","mode":"video","params":[{"k":"ref_image","label":"参考图(可选)","type":"ref","def":""},{"k":"mode","label":"模式","type":"select","options":[{"v":"","label":"自动(有参考图→omni，无→文生视频)"},{"v":"text_to_video","label":"文生视频 T2V"},{"v":"omni_reference","label":"参考图驱动 omni"}],"def":""},{"k":"ratio","label":"比例","type":"select","options":["9:16 (Portrait Widescreen)","16:9 (Widescreen)","1:1 (Square)","3:4 (Portrait Standard)","4:3 (Standard)","21:9 (Ultrawide)"],"def":"9:16 (Portrait Widescreen)"},{"k":"megapixels","label":"分辨率","type":"select","options":[{"v":"0.25","label":"0.25 MP（低清快出）"},{"v":"0.4","label":"0.4 MP（标清）"},{"v":"0.6","label":"0.6 MP（推荐）"},{"v":"0.9","label":"0.9 MP（高清）"},{"v":"1.2","label":"1.2 MP（超清）"}],"def":"0.4"},{"k":"duration","label":"时长(秒)","type":"float","def":5,"help":"视频长度，越长越贵"},{"k":"steps","label":"步数","type":"int","def":8},{"k":"lora","label":"LoRA","type":"select","options":["none","synthpussy","realface","cinematic","physics","nokia"],"def":"none"},{"k":"lora_strength","label":"LoRA强度","type":"float","def":0.9,"help":"仅 LoRA≠none 时生效","group":"advanced"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]},"illustrious_t2i":{"name":"Illustrious 二次元文生图 (T2I)","desc":"WAI-illustrious-SDXL 二次元底模（自带动漫画风）。可选加 Smooth_Booster 画质增强 / Cunnystyle 插画微调。半写实 CG 动漫风","module":"rh_illustrious_api","mode":"t2i","params":[{"k":"resolution","label":"分辨率","type":"select","options":[{"v":"936x1368","label":"936×1368（竖屏 9:16 · 推荐）"},{"v":"768x1344","label":"768×1344（竖屏 9:16 · 低清）"},{"v":"1080x1920","label":"1080×1920（竖屏 9:16 · 高清，更贵）"},{"v":"1216x832","label":"1216×832（横屏 16:9）"},{"v":"1024x1024","label":"1024×1024（方形 1:1）"}],"def":"936x1368"},{"k":"steps","label":"步数","type":"int","def":20},{"k":"cfg","label":"CFG","type":"float","def":2.0,"help":"Illustrious 系建议 2.0 左右"},{"k":"smooth","label":"画质增强 Smooth_Booster","type":"lora","def":true,"def_strength":0.9,"help":"画质平滑/细节增强（通用，二次元底模也适用）"},{"k":"cunnystyle","label":"插画微调 Cunnystyle","type":"lora","def":false,"def_strength":0.8,"help":"平台工作流自带插画风格微调（底模已是二次元，这层可选加味，具体效果待实测）"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]}};
-let SCRIPTS={}, CUR=null, API_BASE='', REF_LIST=[], OUT_LIST=[], CUR_REF='', REF_MODE='refs';
+const EMBEDDED_SCRIPTS={"zimage_i2i":{"name":"Zimage 图生图/文生图 (I2I+T2I)","desc":"参考图换人/换姿势（选图=图生图）/ 纯提示词生图（不选图=文生图）。主力方案","module":"rh_zimage_api","mode":"i2i","params":[{"k":"ref_image","label":"参考图","type":"ref","accepts":"image","def":"","help":"不选 = 文生图"},{"k":"resolution","label":"分辨率","type":"select","options":[{"v":"768x1368","label":"768×1368（竖屏 9:16 · 省币）"},{"v":"1080x1920","label":"1080×1920（竖屏 9:16 · 推荐）"},{"v":"1242x2688","label":"1242×2688（竖屏 9:16 · 高清）"},{"v":"1024x1024","label":"1024×1024（方形 1:1）"},{"v":"1368x768","label":"1368×768（横屏 16:9 · 省币）"},{"v":"1920x1080","label":"1920×1080（横屏 16:9 · 高清）"}],"def":"1080x1920"},{"k":"steps","label":"步数","type":"int","def":12},{"k":"denoise","label":"重绘强度","type":"float","def":0.7,"help":"0.5-0.6锁姿势 / 0.7平衡 / 0.85+大幅改写"},{"k":"lora","label":"LoRA","type":"select","options":[{"v":"none","label":"无"},{"v":"charm","label":"charm · 风情万种人像（细节/锐度最高，欧美骨相+重影调）"},{"v":"nofilter","label":"nofilter · 无滤真实（去AI味/素人感，肤质真实，会轻微改脸）"},{"v":"flowdpo","label":"flowdpo · 真实感光影（治扁平/过曝/塑料感）"},{"v":"model","label":"model · 全能模特展示（强度0.45/步数10）"},{"v":"peach","label":"peach · 蜜桃臀加强（⚠会改脸型，仅限不露脸构图）"},{"v":"zanime","label":"zanime · 二次元动漫化（真人转二次元，选图生图用）"}],"def":"none"},{"k":"lora_strength","label":"LoRA强度","type":"float","def":0.7,"help":"仅 LoRA≠无 时生效"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]},"krea2_t2i":{"name":"Krea2 文生图 (T2I)","desc":"纯文生图，Krea2 底模，支持权重语法 (词:1.5)","module":"rh_krea2_nsfw","mode":"t2i","params":[{"k":"model","label":"底模","type":"select","options":[{"v":"gptruth","label":"GPTruth（写实向，推荐）"},{"v":"nsfw","label":"NSFW V4（能出裸体）"},{"v":"redcraft23","label":"RedCraft23（工作流默认）"},{"v":"redmix","label":"RedMix（写实混合）"},{"v":"moody","label":"Moody（氛围向）"},{"v":"muse","label":"Muse（艺术向）"},{"v":"turbo","label":"Turbo（加速模型，快但略降质）"}],"def":"gptruth"},{"k":"ratio","label":"比例","type":"select","options":["9:16","16:9","1:1","2:3","3:2","3:4","4:3","21:9"],"def":"9:16"},{"k":"mp","label":"分辨率","type":"select","options":[{"v":"0.5","label":"0.5 MP（低清快出）"},{"v":"1.0","label":"1 MP（标清）"},{"v":"2.0","label":"2 MP ≈1080×1920（推荐）"},{"v":"4.0","label":"4 MP（2K级）"},{"v":"8.0","label":"8 MP（超高清）"}],"def":"2.0","help":"2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},{"k":"steps","label":"步数","type":"int","def":12},{"k":"style","label":"画风LoRA · 风情万种","type":"lora","def":true,"def_strength":0.5,"help":"风情万种画风，整体氛围色调"},{"k":"realism","label":"写实LoRA · 真实感引擎","type":"lora","def":true,"def_strength":0.6,"help":"皮肤真实质感，去AI感"},{"k":"body","label":"身材LoRA · 天魔","type":"lora","def":true,"def_strength":0.3,"help":"身材曲线强化（丰胸细腰翘臀）"},{"k":"prompt_weight","label":"PromptWeight","type":"float","def":1.0,"help":"0=禁用；>0 启用 (词:1.5) 权重语法"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"},{"k":"cfg","label":"CFG","type":"float","def":1.0,"help":"Krea2 建议 1.0","group":"advanced"},{"k":"sampler","label":"采样器","type":"select","options":["euler","euler_ancestral","dpmpp_2m","dpmpp_2m_sde","dpmpp_sde","uni_pc"],"def":"euler","group":"advanced"},{"k":"scheduler","label":"调度器","type":"select","options":["simple","normal","karras","sgm_uniform"],"def":"simple","group":"advanced"},{"k":"shift","label":"AuraFlow shift","type":"float","def":3.0,"group":"advanced"},{"k":"rebalance","label":"Rebalance","type":"select","options":["balanced","detail","subtle","uniform","custom"],"def":"detail","group":"advanced"},{"k":"vae","label":"VAE","type":"select","options":["default","hdr","sharp","hd"],"def":"default","help":"hdr 磨皮严重，default 保细节","group":"advanced"},{"k":"out_format","label":"输出格式","type":"select","options":["png","jpg"],"def":"png","group":"advanced"}]},"krea2_i2i":{"name":"Krea2 图生图 (I2I)","desc":"Krea2 + 参考图注入 (LoadImage→VAEEncode)，保持角色改姿势","module":"rh_krea2_nsfw","mode":"i2i","params":[{"k":"ref_image","label":"参考图","type":"ref","accepts":"image","def":"","help":"不选 = 文生图"},{"k":"model","label":"底模","type":"select","options":[{"v":"gptruth","label":"GPTruth（写实向，推荐）"},{"v":"nsfw","label":"NSFW V4（能出裸体）"},{"v":"redcraft23","label":"RedCraft23（工作流默认）"},{"v":"redmix","label":"RedMix（写实混合）"},{"v":"moody","label":"Moody（氛围向）"},{"v":"muse","label":"Muse（艺术向）"},{"v":"turbo","label":"Turbo（加速模型，快但略降质）"}],"def":"gptruth"},{"k":"ratio","label":"比例","type":"select","options":["9:16","16:9","1:1","2:3","3:2","3:4","4:3","21:9"],"def":"9:16"},{"k":"mp","label":"分辨率","type":"select","options":[{"v":"0.5","label":"0.5 MP（低清快出）"},{"v":"1.0","label":"1 MP（标清）"},{"v":"2.0","label":"2 MP ≈1080×1920（推荐）"},{"v":"4.0","label":"4 MP（2K级）"},{"v":"8.0","label":"8 MP（超高清）"}],"def":"2.0","help":"2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},{"k":"steps","label":"步数","type":"int","def":12},{"k":"denoise","label":"重绘强度","type":"float","def":0.65},{"k":"style","label":"画风LoRA · 风情万种","type":"lora","def":true,"def_strength":0.5,"help":"风情万种画风，整体氛围色调"},{"k":"realism","label":"写实LoRA · 真实感引擎","type":"lora","def":true,"def_strength":0.6,"help":"皮肤真实质感，去AI感"},{"k":"body","label":"身材LoRA · 天魔","type":"lora","def":true,"def_strength":0.3,"help":"身材曲线强化（丰胸细腰翘臀）"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"},{"k":"cfg","label":"CFG","type":"float","def":1.0,"help":"Krea2 建议 1.0","group":"advanced"},{"k":"sampler","label":"采样器","type":"select","options":["euler","euler_ancestral","dpmpp_2m","dpmpp_2m_sde","dpmpp_sde","uni_pc"],"def":"euler","group":"advanced"},{"k":"scheduler","label":"调度器","type":"select","options":["simple","normal","karras","sgm_uniform"],"def":"simple","group":"advanced"},{"k":"shift","label":"AuraFlow shift","type":"float","def":3.0,"group":"advanced"},{"k":"rebalance","label":"Rebalance","type":"select","options":["balanced","detail","subtle","uniform","custom"],"def":"detail","group":"advanced"},{"k":"vae","label":"VAE","type":"select","options":["default","hdr","sharp","hd"],"def":"default","help":"hdr 磨皮严重，default 保细节","group":"advanced"},{"k":"out_format","label":"输出格式","type":"select","options":["png","jpg"],"def":"png","group":"advanced"}]},"h3_flf_video":{"name":"MiniMaxH3 首尾帧视频 (I2V)","desc":"首帧图(→尾帧图) → 视频。支持单段/续接，输出 mp4","module":"rh_h3_flf_api","mode":"video","params":[{"k":"first_ref","label":"首帧图","type":"ref","accepts":"image","def":""},{"k":"last_ref","label":"尾帧图(可选)","type":"ref","accepts":"image","def":""},{"k":"ratio","label":"比例","type":"select","options":["9:16 (Portrait Widescreen)","16:9 (Widescreen)","1:1 (Square)","3:4 (Portrait Standard)","4:3 (Standard)","21:9 (Ultrawide)"],"def":"9:16 (Portrait Widescreen)"},{"k":"megapixels","label":"分辨率","type":"select","options":[{"v":"0.25","label":"0.25 MP（低清快出）"},{"v":"0.4","label":"0.4 MP（标清）"},{"v":"0.6","label":"0.6 MP（推荐）"},{"v":"0.9","label":"0.9 MP（高清）"},{"v":"1.2","label":"1.2 MP（超清）"}],"def":"0.6"},{"k":"duration","label":"时长(秒)","type":"float","def":5,"help":"视频长度，越长越贵"},{"k":"steps","label":"步数","type":"int","def":8},{"k":"lora","label":"LoRA","type":"select","options":[{"v":"none","label":"无"},{"v":"synthpussy","label":"synthpussy（阴部细节加强，实测✓）"},{"v":"realface","label":"realface（人物真实质感，触发词 r34l1sm）"},{"v":"cinematic","label":"cinematic（电影级质感，触发词 DY）"},{"v":"physics","label":"physics（物理运动，不稳定）"},{"v":"nokia","label":"nokia（诺基亚复古低清，触发词 nokiastyle）"}],"def":"none"},{"k":"lora_strength","label":"LoRA强度","type":"float","def":0.9,"help":"仅 LoRA≠none 时生效","group":"advanced"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]},"h3_omni_video":{"name":"MiniMaxH3 全能视频 (T2V/参考)","desc":"全能力：文生视频 / 参考图/视频/音频 omni，输出 mp4","module":"rh_workflow_api","mode":"video","params":[{"k":"ref_image","label":"参考图(可选)","type":"ref","accepts":"image","def":""},{"k":"mode","label":"模式","type":"select","options":[{"v":"","label":"自动(有参考图→omni，无→文生视频)"},{"v":"text_to_video","label":"文生视频 T2V"},{"v":"omni_reference","label":"参考图驱动 omni"}],"def":""},{"k":"ratio","label":"比例","type":"select","options":["9:16 (Portrait Widescreen)","16:9 (Widescreen)","1:1 (Square)","3:4 (Portrait Standard)","4:3 (Standard)","21:9 (Ultrawide)"],"def":"9:16 (Portrait Widescreen)"},{"k":"megapixels","label":"分辨率","type":"select","options":[{"v":"0.25","label":"0.25 MP（低清快出）"},{"v":"0.4","label":"0.4 MP（标清）"},{"v":"0.6","label":"0.6 MP（推荐）"},{"v":"0.9","label":"0.9 MP（高清）"},{"v":"1.2","label":"1.2 MP（超清）"}],"def":"0.4"},{"k":"duration","label":"时长(秒)","type":"float","def":5,"help":"视频长度，越长越贵"},{"k":"steps","label":"步数","type":"int","def":8},{"k":"lora","label":"LoRA","type":"select","options":[{"v":"none","label":"无"},{"v":"synthpussy","label":"synthpussy（阴部细节加强，实测✓）"},{"v":"realface","label":"realface（人物真实质感，触发词 r34l1sm）"},{"v":"cinematic","label":"cinematic（电影级质感，触发词 DY）"},{"v":"physics","label":"physics（物理运动，不稳定）"},{"v":"nokia","label":"nokia（诺基亚复古低清，触发词 nokiastyle）"}],"def":"none"},{"k":"lora_strength","label":"LoRA强度","type":"float","def":0.9,"help":"仅 LoRA≠none 时生效","group":"advanced"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]},"reactor_swap":{"name":"ReActor 只换脸（视频）","desc":"像素级换脸：只替换源视频里的人脸，身体/动作/服装/背景原样保留。输出自动贴合源视频分辨率。⚠️ 脸型差异过大会变形；要「连人带货一起换」请用 Wan Animate","module":"rh_reactor","mode":"video","params":[{"k":"source_face","label":"参考脸（要换上去的脸）","type":"ref","accepts":"image","def":"","help":"提供人脸的图，建议正面清晰照"},{"k":"src_video","label":"源视频（被换脸）","type":"ref","accepts":"video","def":"","help":"身体/动作/服装/背景来自它，输出分辨率自动跟随源视频"},{"k":"max_side","label":"最长边上限","type":"select","options":[{"v":"512","label":"512（最快，低清）"},{"v":"768","label":"768（平衡）"},{"v":"1024","label":"1024（默认 · 推荐）"},{"v":"1280","label":"1280（超清 · 慢）"}],"def":"1024","help":"源视频等比缩放到此上限（保持原始宽高比），防止爆显存"},{"k":"compare","label":"额外输出对比版（右拼源视频）","type":"checkbox","def":false},{"k":"face_restore","label":"脸部修复强度","type":"float","def":0.4,"help":"GFPGAN 修复，0=不修复（更原始）/ 0.4=默认 / 1=磨皮最重","group":"advanced"},{"k":"interp","label":"RIFE 补帧倍率","type":"select","options":[{"v":"2","label":"2×（默认 · 推荐）"},{"v":"4","label":"4×（最顺滑，最慢）"},{"v":"1","label":"1×（不补帧 · 仅调试用）"}],"def":"2","help":"⚠️ 本工作流是「关键帧换脸 + RIFE 补帧」：只挑帧换脸，其余靠补帧过渡。关闭补帧（1×）画面会拖慢/顿挫，默认保持 2× 即可"}]},"wan22_animate":{"name":"动作迁移 · Wan Animate 2.2","desc":"生成式角色替换：参考图定身份（脸/发型/服装），源视频定动作。⚠️ 会连同服装/背景一起重画；要「只换脸」请用 ReActor","module":"rh_wan22","mode":"video","params":[{"k":"ref_image","label":"参考图（身份）","type":"ref","accepts":"image","def":"","help":"决定生成人物的长相/形象"},{"k":"ref_video","label":"源视频（动作）","type":"ref","accepts":"video","def":"","help":"提供动作/姿态（只列视频素材）"},{"k":"resolution","label":"分辨率（宽×高）","type":"select","options":[{"v":"480x832","label":"480×832（竖屏 · 推荐，实测通过）"},{"v":"544x960","label":"544×960（竖屏 · 实测通过，稍慢）"},{"v":"576x1024","label":"576×1024（竖屏 · 高清）"},{"v":"640x640","label":"640×640（方形）"},{"v":"768x768","label":"768×768（方形 · 高清）"},{"v":"832x480","label":"832×480（横屏）"},{"v":"960x544","label":"960×544（横屏 · 高清）"},{"v":"1024x576","label":"1024×576（横屏 · 超清）"}],"def":"480x832","help":"实测：720×1280 会显存溢出(OOM)失败，更高的竖屏档位请自行试跑"},{"k":"face_enhance","label":"人脸增强","type":"checkbox","def":true,"help":"启用真实人脸检测（关闭则走黑图，相似度下降）"},{"k":"compare","label":"额外输出对比条（含流程拼接）","type":"checkbox","def":false},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"},{"k":"steps","label":"步数","type":"int","def":6,"help":"默认 6（工作流原值）","group":"advanced"}]},"illustrious_t2i":{"name":"Illustrious 二次元文生图 (T2I)","desc":"WAI-illustrious-SDXL 二次元底模（自带动漫画风）。可选加 Smooth_Booster 画质增强 / Cunnystyle 插画微调。半写实 CG 动漫风","module":"rh_illustrious_api","mode":"t2i","params":[{"k":"resolution","label":"分辨率","type":"select","options":[{"v":"936x1368","label":"936×1368（竖屏 9:16 · 推荐）"},{"v":"768x1344","label":"768×1344（竖屏 9:16 · 低清）"},{"v":"1080x1920","label":"1080×1920（竖屏 9:16 · 高清，更贵）"},{"v":"1216x832","label":"1216×832（横屏 16:9）"},{"v":"1024x1024","label":"1024×1024（方形 1:1）"}],"def":"936x1368"},{"k":"steps","label":"步数","type":"int","def":20},{"k":"cfg","label":"CFG","type":"float","def":2.0,"help":"Illustrious 系建议 2.0 左右"},{"k":"smooth","label":"画质增强 Smooth_Booster","type":"lora","def":true,"def_strength":0.9,"help":"画质平滑/细节增强（通用，二次元底模也适用）"},{"k":"cunnystyle","label":"插画微调 Cunnystyle","type":"lora","def":false,"def_strength":0.8,"help":"平台工作流自带插画风格微调（底模已是二次元，这层可选加味，具体效果待实测）"},{"k":"seed","label":"随机种子","type":"text","def":"","placeholder":"留空 = 随机","group":"advanced"}]}};
+let SCRIPTS={}, CUR=null, API_BASE='', REF_LIST=[], OUT_LIST=[], REF_MODE='refs';
 const $=id=>document.getElementById(id);
 function toast(msg){const t=$('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2600)}
 async function api(url,opt){
@@ -496,7 +548,8 @@ function selectScript(k){
     }else if(p.type==='text'){
       ctl=`<input id="${id}" type="text" value="${p.def||''}"${p.placeholder?` placeholder="${p.placeholder}"`:''}>`;
     }else if(p.type==='ref'){
-      ctl=`<div class="refpick-wrap" data-sync="${p.k==='ref_image'?'main':''}"><input type="hidden" class="refval" id="${id}" value="${p.def||''}"><div class="refpick"></div></div>`;
+      // 槽位模型：渲染成卡片，点击开素材库浮层（每个槽位独立，互不覆盖）
+      return renderSlot(p);
     }else if(p.type==='lora'){
       const st=(p.def_strength!==undefined?p.def_strength:0.5);
       return `<div class="lora-line">
@@ -506,7 +559,13 @@ function selectScript(k){
         ${p.help?`<div class="lora-desc">${p.help}</div>`:''}
       </div>`;
     }else if(p.type==='checkbox'){
-      ctl=`<label class="chk"><input type="checkbox" id="${id}" ${p.def?'checked':''}><span>${p.def?'开':'关'}</span></label>`;
+      // 与 LoRA 开关行统一样式（勾选框在标题前 + 说明缩进），无强度输入框
+      return `<div class="lora-line">
+        <label class="chk-box"><input type="checkbox" id="${id}" ${p.def?'checked':''} onchange="syncChkLabel('${id}')"><span class="box"></span></label>
+        <label class="lora-title" for="${id}">${p.label}</label>
+        <span class="chk-state" id="${id}_state">${p.def?'开':'关'}</span>
+        ${p.help?`<div class="lora-desc">${p.help}</div>`:''}
+      </div>`;
     }else{
       ctl=`<input id="${id}" type="number" step="${p.type==='float'?'0.01':'1'}" value="${p.def}">`;
     }
@@ -517,7 +576,8 @@ function selectScript(k){
     html+=`<details style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px"><summary style="cursor:pointer;color:var(--acc);font-size:13px;user-select:none">⚙ 高级参数</summary><div style="margin-top:4px">${adv.map(render).join('')}</div></details>`;
   }
   $('params').innerHTML=html;
-  if(REF_LIST.length)document.querySelectorAll('.refpick-wrap').forEach(el=>renderRefPick(el));
+  // 槽位卡片已由 renderSlot 内联渲染，这里只需按当前脚本回填绑定值
+  refreshSlots();
 }
 
 async function refreshRefs(){
@@ -525,14 +585,30 @@ async function refreshRefs(){
   try{d=await api('/api/refs')}catch(e){d={refs:[],outputs:[]}}
   REF_LIST=d.refs||[];
   OUT_LIST=d.outputs||[];
-  // 更新 tab 计数
+  const tt=$('refTotal'); if(tt) tt.textContent=String(REF_LIST.length+OUT_LIST.length);
+  // 更新 tab 计数（图片数 / 视频数 / 图片产物数）
   document.querySelectorAll('.rftab').forEach(b=>{
-    const cnt=b.dataset.mode==='refs'?REF_LIST.length:OUT_LIST.length;
-    b.innerHTML=(b.dataset.mode==='refs'?'素材库':'出图产物')+`<span class="cnt">${cnt}</span>`;
+    const cnt=(b.dataset.mode==='refs')?refImgs().length
+             :(b.dataset.mode==='vids')?refVids().length
+             :outImgs().length;
+    const lb=(b.dataset.mode==='refs')?TAB_LABEL.refs
+            :(b.dataset.mode==='vids')?TAB_LABEL.vids:TAB_LABEL.outs;
+    b.innerHTML=lb+`<span class="cnt">${cnt}</span>`;
   });
   renderRefGrid();
-  document.querySelectorAll('.refpick-wrap').forEach(el=>renderRefPick(el));
+  refreshSlots();
 }
+
+// 三类清单：图片素材 / 视频（素材+产物）/ 图片产物
+// 视频单独归到「参考视频」栏，参考图栏不再混入视频（避免 <img> 加载 mp4 破图）
+function refImgs(){return REF_LIST.filter(n=>!isVideoName(n))}
+function refVids(){return REF_LIST.filter(n=>isVideoName(n)).map(n=>({v:n,src:'ref'}))
+  .concat(OUT_LIST.filter(n=>isVideoName(n)).map(n=>({v:n,src:'out'})))}
+function outImgs(){return OUT_LIST.filter(n=>!isVideoName(n))}
+function gridList(mode){
+  return (mode==='refs')?refImgs():(mode==='vids')?refVids():outImgs();
+}
+const TAB_LABEL={refs:'素材图',vids:'参考视频',outs:'出图产物'};
 
 function setRefTab(mode){
   REF_MODE=mode;
@@ -540,36 +616,114 @@ function setRefTab(mode){
   renderRefGrid();
 }
 
+// 视频用 <video preload="metadata">（浏览器解首帧当封面）；
+// 图片才用 <img>。混用会让 mp4 加载失败变成半透明破图块。
+const VID_EXT=/\.(mp4|webm|mov|avi|mkv)$/i;
+function isVideoName(n){return VID_EXT.test(String(n||''))}
+// 视频：默认不加载（preload=none）。mp4 的 moov 在文件尾部（非 faststart），
+// 浏览器要拉完整个文件才出首帧；35 个视频同时预载会拉几十 MB 且长期空白。
+// 改为进入视口时才加载，加载完显示首帧。
+const _vidIO = ('IntersectionObserver' in window)
+  ? new IntersectionObserver(es=>{
+      es.forEach(e=>{
+        if(!e.isIntersecting) return;
+        const v=e.target;
+        _vidIO.unobserve(v);
+        v.preload='metadata';
+        v.load();                       // 真正开始拉数据
+        v.addEventListener('loadeddata',()=>v.classList.add('ready'),{once:true});
+        v.addEventListener('error',()=>{v.classList.add('dead');const b=v.parentNode&&v.parentNode.querySelector('.vbadge');if(b)b.textContent='⚠';},{once:true});
+      });
+    },{rootMargin:'200px'})
+  : null;
+
 function refThumb(name){
   // out: 前缀 → 输出目录；否则 refs 目录（前缀不编码，只编码文件名）
   const f=name.replace(/^out:/,'');
   const u=(API_BASE||'')+'/refs/'+(name.startsWith('out:')?'out:':'')+encodeURIComponent(f);
+  if(isVideoName(name)){
+    // #t=0.1 提示浏览器解首帧当封面；真正拉数据由 IntersectionObserver 触发
+    return `<video src="${u}#t=0.1" preload="none" muted playsinline data-vid="1"></video>`
+      + `<div class="vbadge">▶</div>`;
+  }
   return `<img src="${u}" loading="lazy" onerror="this.style.opacity=.15;this.title='加载失败'">`;
+}
+
+// 渲染后把视频挂上懒加载观察器
+function bindVideoLazy(root){
+  if(!_vidIO) return;
+  (root||document).querySelectorAll('video[data-vid="1"]:not([data-bound])').forEach(v=>{
+    v.dataset.bound='1';
+    _vidIO.observe(v);
+  });
+}
+
+const REF_PAGE_SIZE=9;                       // 单页 9 宫格（3×3）
+const REF_PAGES={refs:1,vids:1,outs:1};      // 三栏各自独立页码，互不串页
+function refPageCount(list){return Math.max(1,Math.ceil((list||[]).length/REF_PAGE_SIZE))}
+function refPageSlice(list,mode){
+  const total=refPageCount(list);
+  const p=Math.min(Math.max(1,REF_PAGES[mode]||1),total);   // 越界收敛，删除后不空白
+  REF_PAGES[mode]=p;
+  const s=(p-1)*REF_PAGE_SIZE;
+  return {items:(list||[]).slice(s,s+REF_PAGE_SIZE),page:p,total:total};
+}
+function refGoTo(page,mode){
+  const list=gridList(mode)||[];
+  const total=refPageCount(list);
+  REF_PAGES[mode]=Math.min(Math.max(1,page|0),total);
+  renderRefGrid();
+}
+function refGoPage(delta,mode){
+  refGoTo((REF_PAGES[mode]||1)+delta, mode);
 }
 
 function renderRefGrid(){
   const g=$('refGrid');
   g.innerHTML='';
-  const list=REF_MODE==='refs'?REF_LIST:OUT_LIST;
-  if(!list.length){
-    g.innerHTML=`<div class="hint">${REF_MODE==='refs'?'暂无素材':'暂无出图产物'}</div>`;
+  const full=gridList(REF_MODE)||[];
+  const {items:list,page,total}=refPageSlice(full,REF_MODE);
+  // 分页器（独立容器，在网格上方，不在网格里抢格子）
+  const pg=$('refPager');
+  if(pg){
+    if(!full.length){
+      pg.innerHTML='';
+    }else{
+      const from=(page-1)*REF_PAGE_SIZE+(list.length?1:0);
+      const to=(page-1)*REF_PAGE_SIZE+list.length;
+      pg.innerHTML=
+        `<span class="rpbtn${page<=1?' off':''}" onclick="refGoTo(1,'${REF_MODE}')">«</span>`
+        + `<span class="rpbtn${page<=1?' off':''}" onclick="refGoPage(-1,'${REF_MODE}')">‹</span>`
+        + `<span class="rpnum">${page} / ${total}</span>`
+        + `<span class="rpbtn${page>=total?' off':''}" onclick="refGoPage(1,'${REF_MODE}')">›</span>`
+        + `<span class="rpbtn${page>=total?' off':''}" onclick="refGoTo(${total},'${REF_MODE}')">»</span>`
+        + `<span class="rpinfo">${from}-${to} / 共 ${full.length}</span>`;
+    }
   }
-  list.forEach(name=>{
+  if(!full.length){
+    const tip=document.createElement('div');tip.className='hint';
+    tip.textContent=REF_MODE==='refs'?'暂无图片素材':(REF_MODE==='vids'?'暂无视频':'暂无出图产物');
+    g.appendChild(tip);
+  }else if(!list.length){
+    const tip=document.createElement('div');tip.className='hint';tip.textContent='本页为空';
+    g.appendChild(tip);
+  }
+  list.forEach(item=>{
+    // 视频栏元素是 {v:文件名, src:'ref'|'out'}；其余栏是纯文件名字符串
+    const isObj=(item&&typeof item==='object');
+    const name=isObj?item.v:item;
+    const val=isObj?((item.src==='out')?('out:'+name):name)
+                   :((REF_MODE==='outs')?('out:'+name):name);
     const d=document.createElement('div');
-    const val=(REF_MODE==='outs'?'out:':'')+name;
-    d.className='rg'+(val===CUR_REF?' sel':'');
+    d.className='rg';
     d.dataset.name=val;
     d.innerHTML=refThumb(val)+
-      (REF_MODE==='outs'?`<span class="badge">产物</span>`:'')+
-      `<span class="x" title="取消选择" onclick="event.stopPropagation();pickRef('')">✕</span>`+
+      (isObj&&item.src==='out'?`<span class="badge">产物</span>`:'')+
       `<span class="del" title="删除" onclick="event.stopPropagation();delRef('${val.replace(/'/g,"\\'")}')">🗑</span>`;
     d.onclick=()=>pickRef(val);
     g.appendChild(d);
   });
-  const sel=$('refSelected');
-  sel.innerHTML=CUR_REF
-    ? `<span style="font-size:12px;color:var(--ok)">已选：${CUR_REF.split('/').pop()}</span>`
-    : '<span class="hint">未选择（= 文生图）</span>';
+  bindVideoLazy(g);
 }
 
 async function delRef(name){
@@ -580,7 +734,6 @@ async function delRef(name){
       body:JSON.stringify({name})});
     if(r.ok){
       toast('已删除 '+show);
-      if(CUR_REF===name)CUR_REF='';
       await refreshRefs();
     }else toast('删除失败: '+(r.error||''));
   }catch(e){
@@ -589,87 +742,139 @@ async function delRef(name){
 }
 
 function pickRef(name){
-  CUR_REF=name||'';
-  renderRefGrid();
-  // 同步到脚本参数里的 ref 控件
-  document.querySelectorAll('.rp').forEach(rp=>rp.classList.toggle('sel',rp.dataset.name===name));
-  // 隐藏字段同步
-  document.querySelectorAll('.refval').forEach(inp=>inp.value=CUR_REF);
+  // 兼容保留：素材库里的点击（纯浏览模式无槽位）。不再有全局选中态。
+  if(PICK.slot){ pickForSlot(name); return; }
+  toast(name.split('/').pop());
 }
 
-function renderRefPick(el){
-  const inp=el.querySelector('.refval');
-  const pick=el.querySelector('.refpick');
-  pick.innerHTML='';
-  const cur=inp.value||'';
-  // “无”占位
-  const none=document.createElement('div');
-  none.className='rp none'+(cur===''?' sel':'');
-  none.dataset.name='';
-  none.textContent='无';
-  none.onclick=()=>{inp.value='';renderRefPick(el);if(el.dataset.sync==='main'){pickRef('')}};
-  pick.appendChild(none);
-  // 素材
-  REF_LIST.forEach(name=>{
-    const d=document.createElement('div');
-    d.className='rp'+(name===cur?' sel':'');
-    d.dataset.name=name;
-    d.innerHTML=refThumb(name)+`<span class="ck">✓</span>`;
-    d.onclick=()=>{
-      inp.value=(inp.value===name)?'':name;
-      renderRefPick(el);
-      if(el.dataset.sync==='main'){pickRef(name)}
-    };
-    pick.appendChild(d);
+// ============================================================
+// 素材槽位模型（v0.5.2 重构）
+// 背景：旧设计用全局单例 CUR_REF + 双向同步，遇到「一个脚本多个 ref
+// 参数」（如 wan22 的参考图+源视频）必然互相覆盖。
+// 新模型：绑定状态按「脚本 + 槽位 key」存，槽位之间完全独立。
+// 素材库只负责「有哪些文件」，槽位负责「这个脚本用哪个」。
+// ============================================================
+let SLOTS={};                                // { "wan22_animate.ref_video": "xxx.mp4" }
+function slotKey(script,k){return script+'.'+k}
+function slotGet(script,k){return SLOTS[slotKey(script,k)]||''}
+function slotSet(script,k,v){ if(v) SLOTS[slotKey(script,k)]=v; else delete SLOTS[slotKey(script,k)]; }
+function slotClear(script){ Object.keys(SLOTS).forEach(k=>{ if(k.startsWith(script+'.')) delete SLOTS[k]; }); }
+
+// 槽位卡片渲染（替代旧的 refpick 平铺选择器）
+// 开关切换时同步右侧「开/关」文字（reuseTask 回填时也用）
+function syncChkLabel(id){
+  const el=$(id); if(!el) return;
+  const st=$(id+'_state');
+  if(st) st.textContent = el.checked ? '开' : '关';
+}
+// 回填开关状态（复用任务参数时用）
+function setChk(id, on){
+  const el=$(id); if(!el) return;
+  el.checked = !!on;
+  syncChkLabel(id);
+}
+
+function renderSlot(p){
+  const id='p_'+p.k;
+  const val=slotGet(CUR,p.k);
+  const accepts=p.accepts||'image';
+  const isVid=(accepts==='video');
+  const tagTxt=isVid?'视频':'图片';
+  const thumb=val?refThumb(val):'';
+  const ph=val?'':(isVid?'🎬':'🖼');
+  return `<div class="slot${val?' filled':''}" id="slot_${p.k}" onclick="onSlotClick('${p.k}','${accepts}')">`
+    + `<div class="slotthumb">${thumb||ph}</div>`
+    + `<div class="slotmeta">`
+    +   `<div class="slotlbl">${p.label}<span class="slottag">${tagTxt}</span></div>`
+    +   `<div class="slotfn${val?'':' empty'}">${val?val.split('/').pop():'点击选择…'}</div>`
+    +   `${p.help?`<div class="slothint">${p.help}</div>`:''}`
+    + `</div>`
+    + `<div class="slotact">${val?'✕':'＋'}</div>`
+    + `<input type="hidden" class="refval" id="${id}" value="${val}">`
+    + `</div>`;
+}
+function refreshSlots(){
+  document.querySelectorAll('.slot').forEach(el=>{
+    const inp=el.querySelector('.refval');
+    if(!inp)return;
+    const k=inp.id.slice(2);                       // p_xxx → xxx
+    const v=SCRIPTS[CUR]&&(SCRIPTS[CUR].params||[]).find(x=>x.k===k);
+    if(!v)return;
+    const val=slotGet(CUR,k);
+    inp.value=val;
+    const th=el.querySelector('.slotthumb');
+    const fn=el.querySelector('.slotfn');
+    const ac=el.querySelector('.slotact');
+    const isVid=(v.accepts==='video');
+    if(th) th.innerHTML = val?refThumb(val):(isVid?'🎬':'🖼');
+    if(fn){ fn.textContent = val?val.split('/').pop():'点击选择…'; fn.className='slotfn'+(val?'':' empty'); }
+    if(ac) ac.textContent = val?'✕':'＋';
+    el.classList.toggle('filled', !!val);
   });
-  // 出图产物（out: 前缀）
-  OUT_LIST.forEach(name=>{
-    const val='out:'+name;
-    const d=document.createElement('div');
-    d.className='rp'+(val===cur?' sel':'');
-    d.dataset.name=val;
-    d.innerHTML=refThumb(val)+`<span class="badge" style="position:absolute;top:1px;right:1px;background:rgba(224,160,60,.9);color:#1a1a1a;font-size:8px;padding:1px 3px;border-radius:3px">出</span><span class="ck">✓</span>`;
-    d.onclick=()=>{
-      inp.value=(inp.value===val)?'':val;
-      renderRefPick(el);
-      if(el.dataset.sync==='main'){pickRef(val)}
-    };
-    pick.appendChild(d);
-  });
+}
+// ============================================================
+// 素材库浮层：复现②的三栏/分页/上传/删除，按槽位 accepts 过滤
+// slotKey 为空 = 纯浏览模式（② 的入口按钮）
+// ============================================================
+let PICK={slot:null,accepts:null};
+function openPicker(slotK,accepts){
+  PICK={slot:slotK||null, accepts:accepts||null};
+  const acc=accepts||'image';
+  // 按 accepts 决定初始 tab + 标题
+  const mode=(acc==='video')?'vids':'refs';
+  REF_MODE=mode;
+  document.querySelectorAll('.rftab').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
+  const v=SCRIPTS[CUR];
+  const p=(v&&v.params||[]).find(x=>x.k===slotK);
+  const tt=$('pickerTitle');
+  if(tt) tt.textContent = p?('选择 → '+p.label):'素材库';
+  const hint=$('pickerHint');
+  if(hint) hint.textContent = p?((acc==='video')?'只显示视频':'只显示图片'):'全部素材';
+  $('pickerMask').classList.add('on');
+  $('pickerBox').classList.add('on');
+  renderRefGrid();
+}
+function closePicker(){
+  $('pickerMask').classList.remove('on');
+  $('pickerBox').classList.remove('on');
+  PICK={slot:null,accepts:null};
+}
+function pickForSlot(name){
+  if(PICK.slot){ slotSet(CUR,PICK.slot,name); }
+  closePicker();
+  refreshSlots();
+}
+function onSlotClick(k,accepts){
+  const cur=slotGet(CUR,k);
+  if(cur){ slotSet(CUR,k,''); refreshSlots(); return; }   // 已绑定 → 解绑
+  openPicker(k,accepts);                                   // 未绑定 → 开素材库
 }
 
 // 选中文件后：显示文件名 + 上传按钮亮起
+// 新 UI 里没有独立的「上传」按钮（选完文件即传），uploadBtn 可能不存在，故全部做空值保护
+function resetUploadCard(){
+  const sub=$('uploadSub'); if(sub){ sub.textContent='JPG / PNG / MP4'; sub.style.color=''; }
+  const btn=$('uploadBtn'); if(btn){ btn.classList.remove('ready'); btn.textContent='上传'; btn.disabled=false; }
+}
 function onRefPicked(){
-  const f=$('refFile').files[0];
+  const f=$('refFile') && $('refFile').files[0];
   const sub=$('uploadSub'), btn=$('uploadBtn');
   if(f){
-    sub.textContent='已选: '+f.name+(f.size?(' ('+(f.size/1024).toFixed(0)+'KB)'):'');
-    sub.style.color='var(--acc)';
-    btn.classList.add('ready');
-    btn.textContent='⬆ 上传 '+f.name.slice(0,12);
+    if(sub){ sub.textContent='已选: '+f.name+(f.size?(' ('+(f.size/1024).toFixed(0)+'KB)'):''); sub.style.color='var(--acc)'; }
+    if(btn){ btn.classList.add('ready'); btn.textContent='⬆ 上传 '+f.name.slice(0,12); }
+    uploadRef();                     // 选完即传（新 UI 无独立上传按钮）
   }else{
     resetUploadCard();
   }
 }
-function resetUploadCard(){
-  $('uploadSub').textContent='JPG / PNG / WEBP';
-  $('uploadSub').style.color='';
-  const btn=$('uploadBtn');
-  btn.classList.remove('ready');
-  btn.textContent='上传';
-  btn.disabled=false;
-}
 async function uploadRef(){
-  const f=$('refFile').files[0];
+  const f=$('refFile') && $('refFile').files[0];
   if(!f){toast('先选文件');return}
   const fd=new FormData();fd.append('image',f);
   const btn=$('uploadBtn'), sub=$('uploadSub');
   // 上传中状态
-  btn.disabled=true;
-  btn.textContent='⏳ 上传中…';
-  btn.classList.remove('ready');
-  sub.textContent='正在上传 '+f.name;
-  sub.style.color='var(--dim)';
+  if(btn){ btn.disabled=true; btn.textContent='⏳ 上传中…'; btn.classList.remove('ready'); }
+  if(sub){ sub.textContent='正在上传 '+f.name; sub.style.color='var(--dim)'; }
   let r;
   try{
     r=await fetch((API_BASE||'')+'/api/upload',{method:'POST',body:fd});
@@ -680,11 +885,11 @@ async function uploadRef(){
   }
   const j=await r.json();
   if(j.ok){
+    // 上传只入库，不自动绑定槽位（旧行为会污染其他槽位）
     toast('已上传 '+j.name);
     $('refFile').value='';
     resetUploadCard();
-    refreshRefs();
-    pickRef(j.name);
+    await refreshRefs();
   }else{
     toast('上传失败: '+j.error);
     resetUploadCard();
@@ -707,7 +912,8 @@ function updateRunBtn(){
 async function submit(){
   if(SUBMIT_LOCK){toast('⚠ 已有任务在运行，请等待完成后再提交');return}
   const v=SCRIPTS[CUR];
-  const params={ref_image:CUR_REF,prompt:$('prompt').value};
+  // 槽位模型：ref_image 不再走全局 CUR_REF，由槽位隐藏字段提供
+  const params={prompt:$('prompt').value};
   v.params.forEach(p=>{
   if(p.type==='lora'){
     const el=$('p_'+p.k), se=$('p_'+p.k+'_strength');
@@ -795,7 +1001,7 @@ async function refreshTasks(){
       body=`<video src="${mediaUrl(t.image)}" preload="metadata" muted playsinline></video>
         <div class="play">▶</div>`;
     }else if(hasMedia){
-      body=`<img src="${mediaUrl(t.image)}" loading="lazy">`;
+      body=`<img src="${mediaUrl(t.image)}" loading="lazy" onerror="tkImgFallback(this)">`;
     }else{
       const prompt=(t.params&&t.params.prompt||'').slice(0,60);
       body=`<div class="nothumb"><div style="font-size:10px;opacity:.7">${st==='error'?'⚠ 失败':(st==='done'?'✅ 完成':(st==='poll_timeout'?'🕐 排队超时':'⏳ '+st))}</div>
@@ -931,24 +1137,22 @@ async function reuseTask(id){
       const sv=p[pp.k+'_strength'];
       if(se&&sv!==undefined&&sv!==null&&sv!=='')se.value=sv;
     }else if(pp.type==='checkbox'){
-      el.checked=String(val).toLowerCase()==='true'||val===true||val==='1';
+      const on=(String(val).toLowerCase()==='true'||val===true||val==='1');
+      el.checked=on;
+      syncChkLabel(pp.k?'p_'+pp.k:'');
     }else if(pp.type==='ref'){
-      // 参考图：同步隐藏字段 + 高亮
+      // 槽位模型：绑定到槽位（只影响这一个槽位）
       el.value=val;
-      const wrap=el.closest('.refpick-wrap');
-      if(wrap)renderRefPick(wrap);
+      slotSet(CUR, pp.k, val||'');
     }else{
       el.value=val;
     }
   });
 
-  // 4) 参考图特殊处理：krea2/zimage 的 ref_image 存 CUR_REF（全局）
+  // 4) 参考图：回填到对应槽位（不再用全局 CUR_REF）
   if(p.ref_image!==undefined&&p.ref_image!==''){
-    CUR_REF=p.ref_image;
-    renderRefGrid();
-    document.querySelectorAll('.rp').forEach(rp=>rp.classList.toggle('sel',rp.dataset.name===CUR_REF));
-  }else{
-    CUR_REF='';
+    slotSet(CUR,'ref_image',p.ref_image);
+    refreshSlots();
   }
 
   // 5) 滚动到表单 + 提示
@@ -970,13 +1174,9 @@ async function extractLastFrame(t){
     const r=await api('/api/task/lastframe',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({id})});
     if(!r.ok){toast('抽帧失败: '+(r.error||'未知'));return}
-    CUR_REF=r.name;                 // 先设为当前选中
-    setRefTab('refs');              // 切到素材库，确保能看到新尾帧
-    await refreshRefs();            // 重载列表 + renderRefGrid（显示"已选"）
-    // 同步脚本参数里的 ref 控件（隐藏字段 + 缩略图选中态）
-    document.querySelectorAll('.refval').forEach(inp=>inp.value=r.name);
-    document.querySelectorAll('.refpick-wrap').forEach(el=>renderRefPick(el));
-    toast('✅ 尾帧已加入参考图并选中: '+r.name);
+    setRefTab('refs');              // 便于看到新尾帧
+    await refreshRefs();
+    toast('🎞 尾帧已加入素材库: '+r.name);
     const dw=$('drawer');if(dw&&dw.classList.contains('open'))toggleDrawer(false);
   }catch(e){
     toast('抽帧失败: 后端未连接');
@@ -1345,6 +1545,15 @@ function renderMedia(path){
     return `<video src="${mediaUrl(path)}" controls preload="metadata" style="max-width:100%;border-radius:6px;margin-top:8px"></video>`;
   }
   return `<img src="${mediaUrl(path)}" style="max-width:100%;border-radius:6px;margin-top:8px">`;
+}
+
+// 缩略图加载失败（文件已删除/404）→ 换成占位块，不留破图
+function tkImgFallback(img){
+  const box=img.closest('.tk'); if(!box) return;
+  const span=document.createElement('div');
+  span.className='nothumb';
+  span.innerHTML='<div style="font-size:10px;opacity:.7">🗑 产物已删除</div>';
+  img.replaceWith(span);
 }
 
 async function clearTasks(){if(!confirm('确定清空全部历史任务？\n（仅清除记录，不删除本地产物文件）'))return;await api('/api/clear',{method:'POST'});refreshTasks()}

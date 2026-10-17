@@ -2,16 +2,18 @@
 __pycache__/
 *.pyc
 
-# ---- 运行时产物（不入库） ----
+# ---- 历史调试脚本（不入库） ----
+scripts/_*.py
+scripts/_*.js
+# ---- 原型（不入库） ----
+prototype_slots.html
 workflows/webui_out/
 workflows/webui_state.json
 workflows/api_key.json
 workflows/webui_server.log
 workflows/*.pid
-workflows/_check.js
-workflows/_embedded_scripts.js
-workflows/_video_prompt.json
-workflows/_recon/
+workflows/_*.json
+workflows/_*.txt
 refs/*
 !refs/.gitkeep
 
