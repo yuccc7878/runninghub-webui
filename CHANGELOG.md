@@ -1,3 +1,27 @@
+## [0.5.3] - 2026-10-18
+### 新增
+- **OpenAI 兼容接口（`scripts/rh_openai.py`）**：第三方软件（SillyTavern 等）可直接按 OpenAI 协议调用出图，无需了解 RunningHub 自有 API。
+  - `POST /v1/images/generations`：文生图，支持 `prompt` / `size` / `n` / `seed` / `steps` / `denoise` / `lora` / `response_format`（url | b64_json）/ `async`（异步任务模式）
+  - `GET /v1/models`：返回 `zimage` 模型 + `server_base`（本机与局域网地址自动发现）
+  - `GET /v1/images/generations/<task_id>`：异步任务轮询
+  - `GET /v1/files/<name>`：产物静态访问
+  - `size` 按面积最近 + 宽高比方向匹配 zimage 的 6 档画布（768×1368 / 1080×1920 / 1242×2688 / 1024×1024 / 1368×768 / 1920×1080）
+  - 强制鉴权：`Authorization: Bearer <openai_key>`，兼容 `api-key` / `x-api-key` 头、大小写差异、Bearer 前缀大小写、引号包裹、前后空格
+  - `url` 跟请求 `Host` 头动态生成：同设备用 `127.0.0.1`，同内网用内网 IP，无需手工配置
+- **API 出图自动登记 WebUI 历史**：`/v1/images/generations` 产物与网页出图共用 `webui_out/` 目录和 `TASKS` 表，历史面板新增「API 出图」分组，可预览、删除、保存到相册。
+- **设置页 OpenAI 配置区块**（设置 → 后端 → OpenAI 兼容接口）：展示 Base URL（同设备/同内网，一键复制）、完整 API Key（可查看/复制）、模型名；支持重新生成 Key 与自定义 Key。
+- **`GET /api/openai_key`**：返回完整 key，仅本机可访问。
+### 安全
+- **撤销 `/v1/chat/completions` 透传**：此前的 LLM 透传会把用户本机配置的私有 LLM Key 借给任何持有 `openai_key` 的人（同内网即可），等于替他人付账。该端点现返回 404 + 明确提示，对话请让客户端直连自己的 LLM 服务。`/v1/models` 也不再列出上游 LLM 模型。
+- **`/api/*` 限制本机访问**：电脑版监听 `0.0.0.0`，此前 `/api/polish`（消耗用户自有 LLM 额度）、`/api/settings`（读写配置）等接口对同内网完全开放。新增 `_is_local_req` / `_deny_nonlocal` 校验，非回环来源一律 403。`/v1/*` 保持对内网开放（走 `openai_key` 鉴权），App 内嵌版绑 `127.0.0.1` 天然不受影响。
+### 修复
+- **鉴权 header 大小写**：`rh_webui` 把 `self.headers` 转成普通 dict 后丢失了 `email.Message` 的大小写不敏感特性，部分客户端发全小写 `authorization` 时鉴权恒失败（日志脱敏后两边看起来完全一致，难以定位）。新增 `_hget` 做大小写不敏感查找；诊断日志增加 key 长度与首个差异位置。
+- **`rh_openai` 目录固化**（安卓端致命）：`OUT_DIR` / `CONFIG_FILE` 在模块级用 `BASE` 算好，而 `serve.py` 只覆盖了 `rh_webui` 的同名常量，导致 API 产物写入只读的 AssetFinder 目录、且读不到 `api_key.json`。改为运行期从 `rh_webui` 动态取（`_out_dir()` / `_cfg_file()`）。
+- **`_webui()` 模块名判断**：只查 `sys.modules['rh_webui']`，命令行 `python3 scripts/rh_webui.py` 启动时模块名是 `__main__`，会静默回退到错误兜底路径。改为两种都认（用 `TASKS` + `OUT_DIR` 特征校验）。
+- **弹窗内容过长无法滚动**：`#setModal` 只有垂直居中，没有 `max-height` / `overflow`，加入 OpenAI 区块后内容超高被挤出屏幕且不可滚动。加 `max-height:88vh` + `overflow-y:auto`。
+- **历史落盘误删保护**：`_save_state()` 在独立进程里被调用时（内存 `TASKS` 为空）会把磁盘上的真实历史覆盖成空。新增保护：内存为空但磁盘非空时拒绝写盘并告警；同时改为「先写 `.tmp` 再 `os.replace`」的原子写，避免写一半损坏。
+- **`/v1/files/` 双目录兼容**：产物目录从 `openai_out` 迁到 `webui_out`（与历史共用），旧产物仍可通过原目录访问。
+
 ## [0.5.2] - 2026-10-16
 ### 新增
 - **ReActor 只换脸（`reactor_swap`）**：像素级换脸，只替换源视频里的人脸，身体/动作/服装/背景原样保留。走平台托管工作流（workflowId `2110722883786321922`，14 节点，`getJsonApiFormat` 实时拉取）。
