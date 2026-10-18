@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """RunningHub 跑图 WebUI 服务端（页面在 webui.html）"""
 
-import json, os, sys, time, threading, traceback, importlib, re
+import json, os, sys, time, threading, traceback, importlib, re, uuid
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from pathlib import Path
@@ -743,13 +743,63 @@ def _resolve_ref_path(ref):
 
 
 def _save_state():
+    """落盘历史任务。带防误删保护：
+    若内存里 TASKS 为空、而磁盘上已有非空记录，说明当前是「另一个进程」
+    （例如脚本 import rh_webui 后调函数），此刻写盘会把真正的历史清空 —— 直接跳过。"""
     try:
+        f = BASE / "workflows" / "webui_state.json"
+        if not TASKS and f.exists():
+            try:
+                old = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                old = {}
+            if old:
+                print(f"[state] 拒绝写空：内存无任务但磁盘有 {len(old)} 条，"
+                      f"疑似独立进程调用，已跳过（避免清空历史）", flush=True)
+                return
         Path(BASE / "workflows").mkdir(parents=True, exist_ok=True)
-        with open(BASE / "workflows" / "webui_state.json", "w") as f:
+        # 先写临时文件再替换，避免写一半断电/被杀导致文件损坏
+        tmp = f.with_suffix(".json.tmp")
+        with open(tmp, "w") as fh:
             json.dump({k: {kk: vv for kk, vv in v.items() if kk != "trace"}
-                       for k, v in TASKS.items()}, f, ensure_ascii=False)
+                       for k, v in TASKS.items()}, fh, ensure_ascii=False)
+        os.replace(str(tmp), str(f))
     except Exception:
         pass
+
+
+# ===== API 出图 → 历史记录 =====
+API_SCRIPT_KEY = "api"
+
+
+def _next_task_id():
+    """分配历史任务号（与网页提交共用 TASK_SEQ，保证 T 编号不重复）。"""
+    TASK_SEQ[0] += 1
+    return f"T{TASK_SEQ[0]:03d}_{int(time.time())}"
+
+
+def _register_api_task(params=None, files=None, image=None, pid=None):
+    """把 OpenAI 兼容层（/v1/images/generations）的产物登记为一条历史任务。
+    这样 API 出的图和网页出的图在历史里统一可见、可预览、可删除。
+    产物已由调用方写入 OUT_DIR（webui_out），这里只建记录 + 落盘 state。"""
+    if not image:
+        return None
+    with _lock:
+        tid = _next_task_id()
+        TASKS[tid] = {
+            "script": API_SCRIPT_KEY,
+            "params": params or {},
+            "status": "done",
+            "pid": str(pid) if pid else None,
+            "image": image,
+            "files": list(files or [image]),
+            "cost": {},
+            "error": None,
+            "ts": time.time(),
+            "source": "api",
+        }
+    _save_state()
+    return tid
 
 
 def _export_to_public(files):
@@ -1440,8 +1490,15 @@ def _has_active_task():
 
 
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *a):
-        pass
+    def log_message(self, fmt, *args):
+        # 轻量请求日志：只打 /v1/* 和非静态接口，避免刷屏
+        try:
+            p = self.path or ""
+            if p.startswith("/v1/") or (p.startswith("/api/") and not p.startswith("/api/tasks")):
+                msg = fmt % args
+                print(f"[req] {self.command} {p} {msg.strip()}", flush=True)
+        except Exception:
+            pass
 
     def _send(self, code, body, ctype="application/json"):
         if isinstance(body, (dict, list)):
@@ -1518,9 +1575,32 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(chunk)
 
+    def _is_local_req(self):
+        """判断请求是否来自本机。
+        /api/* 是 WebUI 自用接口（含读写配置、消耗用户自有 LLM Key 的润色），
+        只该由本机页面调用。电脑版监听 0.0.0.0，若不校验，同内网任何人都能
+        白嫖用户自己填的 LLM Key、读改配置。App 内嵌版绑 127.0.0.1 天然安全。
+        """
+        try:
+            ip = self.client_address[0] if self.client_address else ""
+        except Exception:
+            return False
+        return ip in ("127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1")
+
+    def _deny_nonlocal(self):
+        """/api/* 非本机来源直接拒绝。返回 True 表示已拒绝。"""
+        if self._is_local_req():
+            return False
+        self._send(403, {"error": "该接口仅限本机访问（WebUI 自用配置接口）"})
+        return True
+
     def do_GET(self):
         u = urlparse(self.path)
         path = u.path
+        import rh_openai  # OpenAI 兼容层（/v1/*），函数级导入避免局部变量未绑定
+        # /api/* 仅本机；/v1/* 走 openai_key 鉴权；静态资源不拦
+        if path.startswith("/api/") and self._deny_nonlocal():
+            return
         if path == "/" or path == "/index.html":
             html = HTML_FILE.read_text(encoding="utf-8") if HTML_FILE.exists() else "<h1>webui.html 缺失</h1>"
             # 单源注入：HTML 里 __API_PORT__ 占位符替换为实际监听端口（本地 8770 / app 8765）
@@ -1556,6 +1636,16 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             key = _get_api_key()
             llm = _get_llm_cfg()
+            oa_key = _load_config().get("openai_key") or ""
+            try:
+                _port = self.server.server_address[1]
+            except Exception:
+                _port = RUNNING_PORT
+            try:
+                import rh_openai
+                _lan = rh_openai.list_lan_ips()
+            except Exception:
+                _lan = []
             self._send(200, {
                 "api_key_set": bool(key), "api_key_masked": _mask(key),
                 "llm": {
@@ -1565,7 +1655,18 @@ class Handler(BaseHTTPRequestHandler):
                     "api_key_masked": _mask(llm["api_key"]),
                     "style": llm["style"],
                 },
+                "openai": {
+                    "api_key_set": bool(oa_key),
+                    "api_key_masked": _mask(oa_key),
+                    "base_url_local": f"http://127.0.0.1:{_port}/v1",
+                    "base_url_lan": [f"http://{ip}:{_port}/v1" for ip in _lan],
+                    "model": "zimage",
+                },
             })
+        elif path == "/api/openai_key":
+            # 返回完整 key（本机接口，仅用于复制给第三方软件）
+            oa_key = _load_config().get("openai_key") or ""
+            self._send(200, {"ok": True, "key": oa_key})
         elif path == "/api/backend":
             self._send(200, _backend_status())
         elif path == "/api/update_check":
@@ -1628,12 +1729,35 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"error": "not found"})
                 return
             return self._send_file(fp)
+        elif path == "/v1/models":
+            try:
+                port = self.server.server_address[1]
+            except Exception:
+                port = RUNNING_PORT
+            self._send(200, rh_openai.models(port))
+        elif path.startswith("/v1/images/generations/"):
+            tid = os.path.basename(path)
+            code, resp = rh_openai.task_status(tid)
+            self._send(code, resp)
+        elif path.startswith("/v1/files/"):
+            name = os.path.basename(unquote(path))
+            # 主目录是 webui_out（与历史共用）；openai_out 兼容改造前老的产物
+            cand = [rh_openai._out_dir() / name, OUT_DIR / name]
+            fp = next((c for c in cand if c.exists()), None)
+            if not fp:
+                self._send(404, {"error": "not found"})
+                return
+            return self._send_file(fp)
         else:
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
         u = urlparse(self.path)
         path = u.path
+        import rh_openai  # OpenAI 兼容层（/v1/*），函数级导入避免局部变量未绑定
+        # /api/* 仅本机（含润色会消耗用户自有 LLM Key、可读写配置）
+        if path.startswith("/api/") and self._deny_nonlocal():
+            return
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b"{}"
         if path == "/api/market/submit":
@@ -1677,6 +1801,21 @@ class Handler(BaseHTTPRequestHandler):
                              daemon=True).start()
             _save_state()
             self._send(200, {"task_id": tid})
+        elif path == "/v1/images/generations":
+            try:
+                body = json.loads(raw.decode() or "{}")
+            except Exception:
+                self._send(400, {"error": {"message": "Invalid JSON body", "type": "invalid_request_error"}})
+                return
+            headers = {k: v for k, v in self.headers.items()}
+            host = self.headers.get("Host", f"127.0.0.1:{RUNNING_PORT}")
+            code, resp = rh_openai.generate(body, headers, host)
+            self._send(code, resp)
+        elif path == "/v1/chat/completions":
+            # 不提供对话能力：透传会把用户本机私有 LLM Key 借给任何持有 openai_key 的人
+            headers = {k: v for k, v in self.headers.items()}
+            code, resp = rh_openai.chat_completions(raw, headers)
+            self._send(code, resp)
         elif path == "/api/polish":
             try:
                 data = json.loads(raw.decode() or "{}")
@@ -1719,8 +1858,18 @@ class Handler(BaseHTTPRequestHandler):
                 for fld in ("llm_base_url", "llm_model", "llm_api_key", "llm_style"):
                     if fld in data:
                         cfg[fld] = str(data.get(fld) or "").strip()
+                # OpenAI 兼容层密钥：空串不覆盖；regen=重新生成
+                if data.get("openai_regen"):
+                    cfg["openai_key"] = "sk-" + uuid.uuid4().hex[:32]
+                elif "openai_key" in data:
+                    ok_ = str(data.get("openai_key") or "").strip()
+                    if ok_:
+                        cfg["openai_key"] = ok_
                 _save_config(cfg)
-                self._send(200, {"ok": True})
+                resp = {"ok": True}
+                if data.get("openai_regen") or "openai_key" in data:
+                    resp["openai_key"] = cfg.get("openai_key") or ""
+                self._send(200, resp)
             except Exception as e:
                 self._send(500, {"error": str(e)})
         elif path == "/api/upload":
