@@ -1,3 +1,21 @@
+## [0.5.5] - 2026-10-22
+### 变更
+- **Krea2 合并为单入口**：`krea2_t2i` / `krea2_i2i` 两项合并为 `krea2` 一项，与 `zimage_i2i` 结构对齐——**选图 = 图生图，不选图 = 文生图**。
+  - `rh_krea2_app.run()` 本来就有自动分流能力，拆两项纯属多余
+  - 参数统一为 8 个：`ref_image` / `resolution` / `steps` / `denoise` / `style` / `realism` / `body` / `seed`
+  - LoRA 三位默认强度改按 App 动态取（`LORA_DEFAULT_STRENGTH`），不再需要两套注册项来承载不同默认值
+- **前端卡片标签改为按参数推导**，不再硬编码脚本 key：
+  - `webui.html` 的 `modeTag`：有 `ref` 参数 → 图文双模 / `mode==='t2i'` → 文生图 / 否则图生图
+  - `currentKind()`（AI 润色风格选择）：同样按 `mode` + `ref` 参数推导
+  - 此前的 `k==='zimage_i2i'` 与 `k==='krea2_t2i'` 硬编码已移除，新增脚本无需再改前端
+
+### 不兼容
+- **旧 krea2 历史任务已清除**：`webui_state.json` 中 `script` 为 `krea2_t2i` / `krea2_i2i` 的记录全部删除，不再迁移。此前仅在少数测试者间分发，无需保留。
+- 若曾收藏或脚本化调用 `/api/submit` 并传 `script: "krea2_i2i"`，请改为 `script: "krea2"`。
+
+### 验证
+- 合并后实跑一张 T2I（无参考图）：taskid `2113041109014110209`，832×1216，约 56 秒，正常出图。
+
 ## [0.5.4] - 2026-10-22
 ### 头条
 - **两个生图工作流换新，又快又省**：Krea2 与 Zimage 全部切到已发布 App 通道（`ai-app/run`），不再走 `/proxy` 自己拼 prompt。

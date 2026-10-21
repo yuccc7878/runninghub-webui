@@ -334,7 +334,7 @@ def _restart_backend():
 # 更新检测（v0.5.1）：GitHub 最新 Release vs 当前版本
 # 免 API 方案：latest 重定向 → 解析 tag，绕开 GitHub API 限流(60次/h)
 # ============================================================
-CUR_VERSION = "0.5.4"          # 当前版本号（build.gradle versionName）
+CUR_VERSION = "0.5.5"          # 当前版本号（build.gradle versionName）
 _UPDATE_CACHE = {"ts": 0, "data": None}   # 15 分钟缓存，避免频繁打外网
 
 def _version_tuple(v):
@@ -572,42 +572,25 @@ REGISTRY = {
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机（App 未暴露，仅记录）", "group": "advanced"},
         ],
     },
-    "krea2_t2i": {
-        "name": "Krea2 文生图 (T2I · App)",
-        "desc": "走已发布 App「krea2快速省币」通道。纯文生图，三个 LoRA 位可在运行时换名",
-        "module": "rh_krea2_app", "mode": "t2i",
-        "params": [
-            {"k": "resolution", "label": "分辨率", "type": "select", "options": [
-                {"v": "832x1216", "label": "832×1216（竖屏 2:3 · 省币）"},
-                {"v": "1080x1920", "label": "1080×1920（竖屏 9:16 · 推荐）"},
-                {"v": "1216x832", "label": "1216×832（横屏 3:2）"},
-                {"v": "1024x1024", "label": "1024×1024（方形 1:1）"},
-                {"v": "1920x1080", "label": "1920×1080（横屏 16:9）"},
-            ], "def": "1080x1920", "help": "直接写入 39/40 两个 Int 节点，App 未暴露比例/MP 参数"},
-            {"k": "steps", "label": "步数", "type": "int", "def": 8, "help": "App 默认 8；Krea2 蒸馏模型 6-8 足够"},
-            {"k": "style", "label": "LoRA 画风位 · 风情万种", "type": "lora_name", "def": True, "def_strength": 1.0, "placeholder": "留空 = 沿用 krea2-Cc风情万种-风格", "help": "节点 28。可填短名 charm 或任意真实文件名。默认强度 1.0（T2I App 实际发布值）"},
-            {"k": "realism", "label": "LoRA 写实位 · 真实感引擎", "type": "lora_name", "def": True, "def_strength": 0.5, "placeholder": "留空 = 沿用 realism_engine_krea2_v3.1_new", "help": "节点 29。可填短名 real。默认强度 0.5（T2I App 实际发布值）"},
-            {"k": "body", "label": "LoRA 身材位 · 天魔", "type": "lora_name", "def": True, "def_strength": 0.85, "placeholder": "留空 = 沿用 krea2-Cc-天魔-身材", "help": "节点 30。可填短名 body。默认强度 0.85（T2I App 实际发布值）"},
-        ],
-    },
-    "krea2_i2i": {
-        "name": "Krea2 图生图 (I2I · App)",
-        "desc": "走已发布 App「krea2图生图极速省币」通道。参考图只注入 latent 起点，不选图会自动走文生图",
+    "krea2": {
+        "name": "Krea2 图生图/文生图 (I2I+T2I · App)",
+        "desc": "走已发布 App 通道。选图=图生图（换装/换风格，保留人物身份），不选图=文生图。三个 LoRA 位可在运行时换名",
         "module": "rh_krea2_app", "mode": "i2i",
         "params": [
-            {"k": "ref_image", "label": "参考图", "type": "ref", "accepts": "image", "def": "", "help": "不选 = 走文生图 App。参考图走 42→43→44→36.latent，不进入 CLIP"},
+            {"k": "ref_image", "label": "参考图", "type": "ref", "accepts": "image", "def": "", "help": "不选 = 文生图（走 krea2快速省币 App）；选了 = 图生图（走 krea2图生图极速省币 App）。参考图只注入 latent 起点，不进入 CLIP"},
             {"k": "resolution", "label": "分辨率", "type": "select", "options": [
                 {"v": "832x1216", "label": "832×1216（竖屏 2:3 · 省币）"},
                 {"v": "1080x1920", "label": "1080×1920（竖屏 9:16 · 推荐）"},
                 {"v": "1216x832", "label": "1216×832（横屏 3:2）"},
                 {"v": "1024x1024", "label": "1024×1024（方形 1:1）"},
                 {"v": "1920x1080", "label": "1920×1080（横屏 16:9）"},
-            ], "def": "1080x1920", "help": "同时决定 43 ImageScale 的输出尺寸"},
-            {"k": "steps", "label": "步数", "type": "int", "def": 8},
-            {"k": "denoise", "label": "重绘强度", "type": "float", "def": 0.65, "help": "0.4-0.5 微调 / 0.65 换装保人物 / 0.75+ 结构开始漂移 / 1.0 等于重画（画面必崩）"},
-            {"k": "style", "label": "LoRA 画风位 · 风情万种", "type": "lora_name", "def": True, "def_strength": 0.8, "placeholder": "留空 = 沿用 krea2-Cc风情万种-风格", "help": "节点 28。可填短名 charm 或任意真实文件名。默认强度 0.8（I2I App 实际发布值，与 T2I 的 1.0 不同）"},
-            {"k": "realism", "label": "LoRA 写实位 · 真实感引擎", "type": "lora_name", "def": True, "def_strength": 0.6, "placeholder": "留空 = 沿用 realism_engine_krea2_v3.1_new", "help": "节点 29。可填短名 real。默认强度 0.6（I2I App 实际发布值，与 T2I 的 0.5 不同）"},
-            {"k": "body", "label": "LoRA 身材位 · 天魔", "type": "lora_name", "def": True, "def_strength": 1.0, "placeholder": "留空 = 沿用 krea2-Cc-天魔-身材", "help": "节点 30。可填短名 body。默认强度 1.0（I2I App 实际发布值，与 T2I 的 0.85 不同）"},
+            ], "def": "1080x1920", "help": "写入 39/40 两个 Int 节点；图生图时同时决定 43 ImageScale 的输出尺寸"},
+            {"k": "steps", "label": "步数", "type": "int", "def": 8, "help": "Krea2 蒸馏模型 6-8 步足够"},
+            {"k": "denoise", "label": "重绘强度", "type": "float", "def": 0.65, "help": "仅图生图生效。0.4-0.5 微调 / 0.65 换装保人物 / 0.75+ 结构开始漂移 / 1.0 等于重画（画面必崩）"},
+            {"k": "style", "label": "LoRA 画风位 · 风情万种", "type": "lora_name", "def": True, "def_strength": 0.8, "placeholder": "留空 = 沿用 krea2-Cc风情万种-风格", "help": "节点 28。可填短名 charm 或任意真实文件名。留空沿用发布默认：文生图 1.0 / 图生图 0.8"},
+            {"k": "realism", "label": "LoRA 写实位 · 真实感引擎", "type": "lora_name", "def": True, "def_strength": 0.6, "placeholder": "留空 = 沿用 realism_engine_krea2_v3.1_new", "help": "节点 29。可填短名 real。留空沿用发布默认：文生图 0.5 / 图生图 0.6"},
+            {"k": "body", "label": "LoRA 身材位 · 天魔", "type": "lora_name", "def": True, "def_strength": 1.0, "placeholder": "留空 = 沿用 krea2-Cc-天魔-身材", "help": "节点 30。可填短名 body。留空沿用发布默认：文生图 0.85 / 图生图 1.0"},
+            {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机（App 未暴露，仅记录）", "group": "advanced"},
         ],
     },
     "h3_flf_video": {
@@ -1070,8 +1053,8 @@ def _run_task(task_id, script_key, params):
             _save_state()
             return
 
-        if script_key in ("krea2_t2i", "krea2_i2i"):
-            # Krea2 双 App 通道：t2i → APP_T2I，i2i → APP_I2I（mod.run 按 ref 自动选）
+        if script_key == "krea2":
+            # 单入口双模：有参考图 → APP_I2I，无 → APP_T2I（mod.run 内部自动分流）
             res_s = str(params.get("resolution") or "").strip().lower()
             _w = _h = None
             if "x" in res_s:
@@ -1081,13 +1064,12 @@ def _run_task(task_id, script_key, params):
                     _w = _h = None
             width = _w or 1080
             height = _h or 1920
+            ref = params.get("ref_image") or ""
             ref_path = None
-            if script_key == "krea2_i2i":
-                ref = params.get("ref_image") or ""
-                if ref:
-                    ref_path = _resolve_ref_path(ref)
-                    if not ref_path:
-                        raise RuntimeError(f"参考图不存在: {ref}")
+            if ref:
+                ref_path = _resolve_ref_path(ref)
+                if not ref_path:
+                    raise RuntimeError(f"参考图不存在: {ref}")
             # LoRA 三位：勾选且填了文件名才提交，否则沿用 App 发布时的默认 LoRA
             lora_kw = {}
             for slot, key, st_key in (("lora_style", "style", "style_strength"),
