@@ -334,7 +334,7 @@ def _restart_backend():
 # 更新检测（v0.5.1）：GitHub 最新 Release vs 当前版本
 # 免 API 方案：latest 重定向 → 解析 tag，绕开 GitHub API 限流(60次/h)
 # ============================================================
-CUR_VERSION = "0.5.3"          # 当前版本号（build.gradle versionName）
+CUR_VERSION = "0.5.4"          # 当前版本号（build.gradle versionName）
 _UPDATE_CACHE = {"ts": 0, "data": None}   # 15 分钟缓存，避免频繁打外网
 
 def _version_tuple(v):
@@ -434,7 +434,7 @@ def _inject_api_key(mod):
         return False
     mods = [mod]
     # 无论传哪个模块，都把所有底层脚本模块一起注入，避免跨模块调用漏注入
-    for mname in ("rh_zimage_api", "rh_krea2_nsfw", "rh_h3_flf_api", "rh_workflow_api", "rh_wan22", "rh_reactor"):
+    for mname in ("rh_zimage_app", "rh_zimage_api", "rh_krea2_app", "rh_krea2_nsfw", "rh_h3_flf_api", "rh_workflow_api", "rh_wan22", "rh_reactor"):
         try:
             m = importlib.import_module(mname)
             if m not in mods:
@@ -481,8 +481,9 @@ def _recover_stale_tasks():
 
     进程被杀/重启 → 轮询线程消失 → 任务状态永远卡住 → 前端显示提交中、提交锁被占死。
     对每个遗留活跃任务 spawn 后台线程查远端：已完成→拉回落盘；还在跑→续轮询；
-    远端不存在→标记失败；查询失败→保持原状态（网络问题留给用户手动错误查询）。
-    绝不自动重提（避免重复烧币）。"""
+    远端已失败 或 远端不存在 → 标记 error + 置 resubmit_pending，
+        由前端弹窗让用户决定是否重新提交（绝不自动重提，避免重复烧币）；
+    查询失败（网络）→ 保持原状态，留给用户手动错误查询。"""
     with _lock:
         stale = [(tid, t.get("pid"), t.get("script") or "") for tid, t in TASKS.items()
                  if t.get("status") in ("queued", "submitting", "running", "poll_timeout")]
@@ -495,6 +496,9 @@ def _recover_stale_tasks():
             if script_key not in REGISTRY:
                 return
             mod = _load_module(REGISTRY[script_key]["module"])
+            # 必须先注入 Key：进程刚启动时模块内 API_KEY 还是空串，
+            # 直接查远端会返回 301 must not be blank，导致遗留任务全部卡死
+            _inject_api_key(mod)
             if not pid:
                 # 无 pid：无法续，但绝不重提，标记为中断
                 with _lock:
@@ -502,7 +506,7 @@ def _recover_stale_tasks():
                     TASKS[tid]["error"] = "进程重启导致任务中断（无任务号，无法恢复）"
                 _save_state()
                 return
-            st = _check_pid_status(pid)
+            st = _check_pid_status(pid, mod)
             if st["status"] == "success":
                 try:
                     saved = _download_from_entry(tid, mod, st["detail"], pid)
@@ -516,11 +520,26 @@ def _recover_stale_tasks():
             if st["status"] in ("pending", "running", "queued"):
                 _resume_poll(tid, mod, pid)
                 return
+            # 远端已失败：标记 error 并挂起「是否重提」的询问，由前端弹窗决定
+            if st["status"] == "error":
+                with _lock:
+                    TASKS[tid].update({
+                        "status": "error",
+                        "error": f"远端执行失败: {st['detail']}",
+                        "resubmit_pending": True,
+                    })
+                _save_state()
+                print(f"[recover] {tid} 远端已失败，等待用户确认是否重提")
+                return
             if st["status"] == "not_found":
                 with _lock:
-                    TASKS[tid]["status"] = "error"
-                    TASKS[tid]["error"] = "远端任务不存在（可能已过期），已标记失败"
+                    TASKS[tid].update({
+                        "status": "error",
+                        "error": "远端任务不存在（可能已过期），已标记失败",
+                        "resubmit_pending": True,
+                    })
                 _save_state()
+                print(f"[recover] {tid} 远端任务不存在，等待用户确认是否重提")
                 return
             # api_error：网络问题，保持原状态，留给用户手动错误查询
             print(f"[recover] {tid} 远端查询失败，保持原状态")
@@ -533,11 +552,11 @@ def _recover_stale_tasks():
 
 REGISTRY = {
     "zimage_i2i": {
-        "name": "Zimage 图生图/文生图 (I2I+T2I)",
-        "desc": "参考图换人/换姿势（选图=图生图）/ 纯提示词生图（不选图=文生图）。主力方案",
-        "module": "rh_zimage_api", "mode": "i2i",
+        "name": "Zimage 图生图/文生图 (I2I+T2I · App)",
+        "desc": "走已发布 App 通道。选图=图生图（换装/换风格，保留人物身份），不选图=文生图。主力方案",
+        "module": "rh_zimage_app", "mode": "i2i",
         "params": [
-            {"k": "ref_image", "label": "参考图", "type": "ref", "accepts": "image", "def": "", "help": "不选 = 文生图"},
+            {"k": "ref_image", "label": "参考图", "type": "ref", "accepts": "image", "def": "", "help": "不选 = 文生图（走 zimage文生图 App）"},
             {"k": "resolution", "label": "分辨率", "type": "select", "options": [
                 {"v": "768x1368", "label": "768×1368（竖屏 9:16 · 省币）"},
                 {"v": "1080x1920", "label": "1080×1920（竖屏 9:16 · 推荐）"},
@@ -546,66 +565,49 @@ REGISTRY = {
                 {"v": "1368x768", "label": "1368×768（横屏 16:9 · 省币）"},
                 {"v": "1920x1080", "label": "1920×1080（横屏 16:9 · 高清）"},
             ], "def": "1080x1920"},
-            {"k": "steps", "label": "步数", "type": "int", "def": 12},
-            {"k": "denoise", "label": "重绘强度", "type": "float", "def": 0.7, "help": "0.5-0.6锁姿势 / 0.7平衡 / 0.85+大幅改写"},
-            {"k": "lora", "label": "LoRA", "type": "select", "options": [
-                {"v": "none", "label": "无"},
-                {"v": "charm", "label": "charm · 风情万种人像（细节/锐度最高，欧美骨相+重影调）"},
-                {"v": "nofilter", "label": "nofilter · 无滤真实（去AI味/素人感，肤质真实，会轻微改脸）"},
-                {"v": "flowdpo", "label": "flowdpo · 真实感光影（治扁平/过曝/塑料感）"},
-                {"v": "model", "label": "model · 全能模特展示（强度0.45/步数10）"},
-                {"v": "peach", "label": "peach · 蜜桃臀加强（⚠会改脸型，仅限不露脸构图）"},
-                {"v": "zanime", "label": "zanime · 二次元动漫化（真人转二次元，选图生图用）"},
-            ], "def": "none"},
-            {"k": "lora_strength", "label": "LoRA强度", "type": "float", "def": 0.7, "help": "仅 LoRA≠无 时生效"},
-            {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
+            {"k": "steps", "label": "步数", "type": "int", "def": 6, "help": "turbo 蒸馏模型，6 步足够；8-10 细节略多但更慢"},
+            {"k": "denoise", "label": "重绘强度", "type": "float", "def": 0.65, "help": "仅图生图生效。0.4-0.5 轻度改 / 0.65 换装保留人物 / 0.85+ 结构漂移"},
+            {"k": "lora_a", "label": "LoRA 位A · 瑶光位", "type": "lora_name", "def": False, "def_strength": 0.3, "placeholder": "留空=沿用 Kook_Zimage_瑶光；可填真实文件名或短名", "help": "仅图生图生效。接在 UNET 之后，运行时替换任意 LoRA。短名可填 charm / nofilter / flowdpo / model / peach / zanime"},
+            {"k": "lora_b", "label": "LoRA 位B · 如梦位", "type": "lora_name", "def": False, "def_strength": 0.25, "placeholder": "留空=沿用 Kook_Zimage_如梦似幻；可填真实文件名或短名", "help": "仅图生图生效。接在位A 之后"},
+            {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机（App 未暴露，仅记录）", "group": "advanced"},
         ],
     },
     "krea2_t2i": {
-        "name": "Krea2 文生图 (T2I)",
-        "desc": "纯文生图，Krea2 底模，支持权重语法 (词:1.5)",
-        "module": "rh_krea2_nsfw", "mode": "t2i",
+        "name": "Krea2 文生图 (T2I · App)",
+        "desc": "走已发布 App「krea2快速省币」通道。纯文生图，三个 LoRA 位可在运行时换名",
+        "module": "rh_krea2_app", "mode": "t2i",
         "params": [
-            {"k": "model", "label": "底模", "type": "select", "options": [{"v": "gptruth", "label": "GPTruth（写实向，推荐）"}, {"v": "nsfw", "label": "NSFW V4（能出裸体）"}, {"v": "redcraft23", "label": "RedCraft23（工作流默认）"}, {"v": "redmix", "label": "RedMix（写实混合）"}, {"v": "moody", "label": "Moody（氛围向）"}, {"v": "muse", "label": "Muse（艺术向）"}, {"v": "turbo", "label": "Turbo（加速模型，快但略降质）"}], "def": "gptruth"},
-            {"k": "ratio", "label": "比例", "type": "select", "options": ["9:16", "16:9", "1:1", "2:3", "3:2", "3:4", "4:3", "21:9"], "def": "9:16"},
-            {"k": "mp", "label": "分辨率", "type": "select", "options": [{"v": "0.5", "label": "0.5 MP（低清快出）"}, {"v": "1.0", "label": "1 MP（标清）"}, {"v": "2.0", "label": "2 MP ≈1080×1920（推荐）"}, {"v": "4.0", "label": "4 MP（2K级）"}, {"v": "8.0", "label": "8 MP（超高清）"}], "def": "2.0", "help": "2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},
-            {"k": "steps", "label": "步数", "type": "int", "def": 12},
-            {"k": "style", "label": "画风LoRA · 风情万种", "type": "lora", "def": True, "def_strength": 0.5, "help": "风情万种画风，整体氛围色调"},
-            {"k": "realism", "label": "写实LoRA · 真实感引擎", "type": "lora", "def": True, "def_strength": 0.6, "help": "皮肤真实质感，去AI感"},
-            {"k": "body", "label": "身材LoRA · 天魔", "type": "lora", "def": True, "def_strength": 0.3, "help": "身材曲线强化（丰胸细腰翘臀）"},
-            {"k": "prompt_weight", "label": "PromptWeight", "type": "float", "def": 1.0, "help": "0=禁用；>0 启用 (词:1.5) 权重语法"},
-            {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
-            {"k": "cfg", "label": "CFG", "type": "float", "def": 1.0, "help": "Krea2 建议 1.0", "group": "advanced"},
-            {"k": "sampler", "label": "采样器", "type": "select", "options": ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "dpmpp_sde", "uni_pc"], "def": "euler", "group": "advanced"},
-            {"k": "scheduler", "label": "调度器", "type": "select", "options": ["simple", "normal", "karras", "sgm_uniform"], "def": "simple", "group": "advanced"},
-            {"k": "shift", "label": "AuraFlow shift", "type": "float", "def": 3.0, "group": "advanced"},
-            {"k": "rebalance", "label": "Rebalance", "type": "select", "options": ["balanced", "detail", "subtle", "uniform", "custom"], "def": "detail", "group": "advanced"},
-            {"k": "vae", "label": "VAE", "type": "select", "options": ["default", "hdr", "sharp", "hd"], "def": "default", "help": "hdr 磨皮严重，default 保细节", "group": "advanced"},
-            {"k": "out_format", "label": "输出格式", "type": "select", "options": ["png", "jpg"], "def": "png", "group": "advanced"},
+            {"k": "resolution", "label": "分辨率", "type": "select", "options": [
+                {"v": "832x1216", "label": "832×1216（竖屏 2:3 · 省币）"},
+                {"v": "1080x1920", "label": "1080×1920（竖屏 9:16 · 推荐）"},
+                {"v": "1216x832", "label": "1216×832（横屏 3:2）"},
+                {"v": "1024x1024", "label": "1024×1024（方形 1:1）"},
+                {"v": "1920x1080", "label": "1920×1080（横屏 16:9）"},
+            ], "def": "1080x1920", "help": "直接写入 39/40 两个 Int 节点，App 未暴露比例/MP 参数"},
+            {"k": "steps", "label": "步数", "type": "int", "def": 8, "help": "App 默认 8；Krea2 蒸馏模型 6-8 足够"},
+            {"k": "style", "label": "LoRA 画风位 · 风情万种", "type": "lora_name", "def": True, "def_strength": 1.0, "placeholder": "留空 = 沿用 krea2-Cc风情万种-风格", "help": "节点 28。可填短名 charm 或任意真实文件名。默认强度 1.0（T2I App 实际发布值）"},
+            {"k": "realism", "label": "LoRA 写实位 · 真实感引擎", "type": "lora_name", "def": True, "def_strength": 0.5, "placeholder": "留空 = 沿用 realism_engine_krea2_v3.1_new", "help": "节点 29。可填短名 real。默认强度 0.5（T2I App 实际发布值）"},
+            {"k": "body", "label": "LoRA 身材位 · 天魔", "type": "lora_name", "def": True, "def_strength": 0.85, "placeholder": "留空 = 沿用 krea2-Cc-天魔-身材", "help": "节点 30。可填短名 body。默认强度 0.85（T2I App 实际发布值）"},
         ],
     },
     "krea2_i2i": {
-        "name": "Krea2 图生图 (I2I)",
-        "desc": "Krea2 + 参考图注入 (LoadImage→VAEEncode)，保持角色改姿势",
-        "module": "rh_krea2_nsfw", "mode": "i2i",
+        "name": "Krea2 图生图 (I2I · App)",
+        "desc": "走已发布 App「krea2图生图极速省币」通道。参考图只注入 latent 起点，不选图会自动走文生图",
+        "module": "rh_krea2_app", "mode": "i2i",
         "params": [
-            {"k": "ref_image", "label": "参考图", "type": "ref", "accepts": "image", "def": "", "help": "不选 = 文生图"},
-            {"k": "model", "label": "底模", "type": "select", "options": [{"v": "gptruth", "label": "GPTruth（写实向，推荐）"}, {"v": "nsfw", "label": "NSFW V4（能出裸体）"}, {"v": "redcraft23", "label": "RedCraft23（工作流默认）"}, {"v": "redmix", "label": "RedMix（写实混合）"}, {"v": "moody", "label": "Moody（氛围向）"}, {"v": "muse", "label": "Muse（艺术向）"}, {"v": "turbo", "label": "Turbo（加速模型，快但略降质）"}], "def": "gptruth"},
-            {"k": "ratio", "label": "比例", "type": "select", "options": ["9:16", "16:9", "1:1", "2:3", "3:2", "3:4", "4:3", "21:9"], "def": "9:16"},
-            {"k": "mp", "label": "分辨率", "type": "select", "options": [{"v": "0.5", "label": "0.5 MP（低清快出）"}, {"v": "1.0", "label": "1 MP（标清）"}, {"v": "2.0", "label": "2 MP ≈1080×1920（推荐）"}, {"v": "4.0", "label": "4 MP（2K级）"}, {"v": "8.0", "label": "8 MP（超高清）"}], "def": "2.0", "help": "2 MP 约等于 1080×1920 竖屏，越大越贵越慢"},
-            {"k": "steps", "label": "步数", "type": "int", "def": 12},
-            {"k": "denoise", "label": "重绘强度", "type": "float", "def": 0.65},
-            {"k": "style", "label": "画风LoRA · 风情万种", "type": "lora", "def": True, "def_strength": 0.5, "help": "风情万种画风，整体氛围色调"},
-            {"k": "realism", "label": "写实LoRA · 真实感引擎", "type": "lora", "def": True, "def_strength": 0.6, "help": "皮肤真实质感，去AI感"},
-            {"k": "body", "label": "身材LoRA · 天魔", "type": "lora", "def": True, "def_strength": 0.3, "help": "身材曲线强化（丰胸细腰翘臀）"},
-            {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
-            {"k": "cfg", "label": "CFG", "type": "float", "def": 1.0, "help": "Krea2 建议 1.0", "group": "advanced"},
-            {"k": "sampler", "label": "采样器", "type": "select", "options": ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "dpmpp_sde", "uni_pc"], "def": "euler", "group": "advanced"},
-            {"k": "scheduler", "label": "调度器", "type": "select", "options": ["simple", "normal", "karras", "sgm_uniform"], "def": "simple", "group": "advanced"},
-            {"k": "shift", "label": "AuraFlow shift", "type": "float", "def": 3.0, "group": "advanced"},
-            {"k": "rebalance", "label": "Rebalance", "type": "select", "options": ["balanced", "detail", "subtle", "uniform", "custom"], "def": "detail", "group": "advanced"},
-            {"k": "vae", "label": "VAE", "type": "select", "options": ["default", "hdr", "sharp", "hd"], "def": "default", "help": "hdr 磨皮严重，default 保细节", "group": "advanced"},
-            {"k": "out_format", "label": "输出格式", "type": "select", "options": ["png", "jpg"], "def": "png", "group": "advanced"},
+            {"k": "ref_image", "label": "参考图", "type": "ref", "accepts": "image", "def": "", "help": "不选 = 走文生图 App。参考图走 42→43→44→36.latent，不进入 CLIP"},
+            {"k": "resolution", "label": "分辨率", "type": "select", "options": [
+                {"v": "832x1216", "label": "832×1216（竖屏 2:3 · 省币）"},
+                {"v": "1080x1920", "label": "1080×1920（竖屏 9:16 · 推荐）"},
+                {"v": "1216x832", "label": "1216×832（横屏 3:2）"},
+                {"v": "1024x1024", "label": "1024×1024（方形 1:1）"},
+                {"v": "1920x1080", "label": "1920×1080（横屏 16:9）"},
+            ], "def": "1080x1920", "help": "同时决定 43 ImageScale 的输出尺寸"},
+            {"k": "steps", "label": "步数", "type": "int", "def": 8},
+            {"k": "denoise", "label": "重绘强度", "type": "float", "def": 0.65, "help": "0.4-0.5 微调 / 0.65 换装保人物 / 0.75+ 结构开始漂移 / 1.0 等于重画（画面必崩）"},
+            {"k": "style", "label": "LoRA 画风位 · 风情万种", "type": "lora_name", "def": True, "def_strength": 0.8, "placeholder": "留空 = 沿用 krea2-Cc风情万种-风格", "help": "节点 28。可填短名 charm 或任意真实文件名。默认强度 0.8（I2I App 实际发布值，与 T2I 的 1.0 不同）"},
+            {"k": "realism", "label": "LoRA 写实位 · 真实感引擎", "type": "lora_name", "def": True, "def_strength": 0.6, "placeholder": "留空 = 沿用 realism_engine_krea2_v3.1_new", "help": "节点 29。可填短名 real。默认强度 0.6（I2I App 实际发布值，与 T2I 的 0.5 不同）"},
+            {"k": "body", "label": "LoRA 身材位 · 天魔", "type": "lora_name", "def": True, "def_strength": 1.0, "placeholder": "留空 = 沿用 krea2-Cc-天魔-身材", "help": "节点 30。可填短名 body。默认强度 1.0（I2I App 实际发布值，与 T2I 的 0.85 不同）"},
         ],
     },
     "h3_flf_video": {
@@ -897,13 +899,6 @@ def _run_task(task_id, script_key, params):
             _save_state()
         # 注入用户配置的 API Key（替代脚本内写死的 key）
         _inject_api_key(mod)
-        # krea2_i2i 分支会 import rh_zimage_api 做参考图上传，也要注入
-        if script_key == "krea2_i2i":
-            try:
-                import rh_zimage_api as _Z
-                _inject_api_key(_Z)
-            except Exception:
-                pass
         if script_key == "wan22_animate":
             try:
                 import rh_wan22 as _W
@@ -1075,19 +1070,66 @@ def _run_task(task_id, script_key, params):
             _save_state()
             return
 
+        if script_key in ("krea2_t2i", "krea2_i2i"):
+            # Krea2 双 App 通道：t2i → APP_T2I，i2i → APP_I2I（mod.run 按 ref 自动选）
+            res_s = str(params.get("resolution") or "").strip().lower()
+            _w = _h = None
+            if "x" in res_s:
+                try:
+                    _w, _h = (int(x) for x in res_s.split("x")[:2])
+                except ValueError:
+                    _w = _h = None
+            width = _w or 1080
+            height = _h or 1920
+            ref_path = None
+            if script_key == "krea2_i2i":
+                ref = params.get("ref_image") or ""
+                if ref:
+                    ref_path = _resolve_ref_path(ref)
+                    if not ref_path:
+                        raise RuntimeError(f"参考图不存在: {ref}")
+            # LoRA 三位：勾选且填了文件名才提交，否则沿用 App 发布时的默认 LoRA
+            lora_kw = {}
+            for slot, key, st_key in (("lora_style", "style", "style_strength"),
+                                      ("lora_real", "realism", "real_strength"),
+                                      ("lora_body", "body", "body_strength")):
+                nm = str(params.get(key + "_name") or "").strip()
+                if nm:
+                    lora_kw[slot] = nm
+                    lora_kw[st_key] = float(params.get(key + "_strength", 0.8))
+            with _lock:
+                TASKS[task_id]["status"] = "submitting"
+            res = mod.run(
+                prompt_text=prompt,
+                ref_image_path=ref_path,
+                width=width,
+                height=height,
+                steps=int(params.get("steps", 8)),
+                denoise=float(params.get("denoise", 0.65)) if ref_path else None,
+                download_dir=str(OUT_DIR),
+                on_submit=_on_submit,
+                verbose=False,
+                **lora_kw,
+            )
+            saved = [os.path.basename(p) for p in (res.get("saved") or [])]
+            with _lock:
+                TASKS[task_id].update({
+                    "status": "done", "image": saved[0] if saved else None,
+                    "files": saved, "pid": res.get("task_id"), "error": None,
+                })
+            _save_state()
+            return
+
         if script_key == "zimage_i2i":
             ref = params.get("ref_image") or ""
-            # 有参考图 → 图生图（支持 refs/ 与 out: 前缀）；无 → 自动切文生图
+            # 有参考图 → 图生图 App；无 → 文生图 App
             ref_path = _resolve_ref_path(ref)
-            lora = params.get("lora") or None
-            if lora == "none":
-                lora = None
             seed_s = str(params.get("seed") or "").strip()
             try:
                 seed = int(seed_s) if seed_s else None
             except ValueError:
                 seed = None
-            # 分辨率：新下拉 "宽x高"，回退旧的 width/height 字段（历史任务重跑兼容）
+            # 分辨率：下拉 "宽x高"，回退旧的 width/height 字段（历史任务重跑兼容）
             _w = _h = None
             res_s = str(params.get("resolution") or "").strip().lower()
             if res_s and "x" in res_s:
@@ -1099,17 +1141,29 @@ def _run_task(task_id, script_key, params):
             height = _h or int(params.get("height", 1920))
             with _lock:
                 TASKS[task_id]["status"] = "submitting"
+            # LoRA：前端 lora_name 控件提交 {k}_name 与 {k}_strength
+            # name 为空 = 不传该字段，后端沿用 App 发布时的默认 LoRA
+            _la = str(params.get("lora_a_name") or "").strip()
+            _lb = str(params.get("lora_b_name") or "").strip()
+            _lora_kw = {}
+            if _la:
+                _lora_kw["lora_name"] = _la
+                _lora_kw["lora_strength"] = float(params.get("lora_a_strength", 0.3))
+            if _lb:
+                _lora_kw["lora_name_b"] = _lb
+                _lora_kw["lora_strength_b"] = float(params.get("lora_b_strength", 0.25))
+            # rh_zimage_app.run 内部按 ref_image_path 自动选 App
             res = mod.run(
                 prompt_text=prompt,
                 ref_image_path=ref_path,
                 width=width,
                 height=height,
-                steps=int(params.get("steps", 12)),
-                denoise=float(params.get("denoise", 0.7)),
-                seed=seed,
-                lora=lora, lora_strength=float(params.get("lora_strength", 0.7)) if lora else None,
+                steps=int(params.get("steps", 6)),
+                denoise=float(params.get("denoise", 0.65)),
                 download_dir=str(OUT_DIR),
                 on_submit=_on_submit,
+                verbose=False,
+                **_lora_kw,
             )
             saved = [os.path.basename(p) for p in (res.get("saved") or [])]
             with _lock:
@@ -1204,23 +1258,6 @@ def _run_task(task_id, script_key, params):
                 use_realism_lora=use_realism,
                 use_body_lora=use_body,
             )
-            if script_key == "krea2_i2i":
-                ref = params.get("ref_image")
-                if not ref:
-                    raise ValueError("图生图需要选择参考图")
-                ref_path = _resolve_ref_path(ref)
-                if not ref_path:
-                    raise ValueError(f"参考图不存在: {ref}")
-                import rh_zimage_api as R
-                up = R.upload_image(ref_path)
-                p["300"] = {"class_type": "LoadImage", "inputs": {"image": up, "upload": "image"}}
-                p["301"] = {"class_type": "ImageScale", "inputs": {
-                    "image": ["300", 0], "upscale_method": "lanczos",
-                    "width": ["49", 0], "height": ["49", 1], "crop": "disabled"}}
-                p["302"] = {"class_type": "VAEEncode", "inputs": {
-                    "pixels": ["301", 0], "vae": ["57", 0]}}
-                p["53"]["inputs"]["latent_image"] = ["302", 0]
-                p["53"]["inputs"]["denoise"] = float(params.get("denoise", 0.65))
             with _lock:
                 TASKS[task_id]["status"] = "submitting"
             pid = mod.submit(p)
@@ -1269,10 +1306,19 @@ def _run_task(task_id, script_key, params):
 # ============================================================
 # 错误查询 / 断点续跑（v0.4.7）
 # ============================================================
-def _check_pid_status(pid):
+def _check_pid_status(pid, mod=None):
     """一次性查远端任务状态，不阻塞。返回 {status, detail}。
     status ∈ success / error / running / queued / not_found / api_error
-    查 /history/<pid>（成功/失败/进行中+outputs），查不到再查 /queue（排队 vs 生成中）。"""
+    两条通道：
+      mod.IS_APP_CHANNEL → pid 是 ai-app/run 的 taskId，走 check_app_task（/task/openapi/outputs）
+      否则 → /proxy 的 prompt_id，查 /history/<pid>，查不到再查 /queue"""
+    # ---- 0. App 通道：pid 是 taskId，/proxy/history 里根本不存在 ----
+    if mod is not None and getattr(mod, "IS_APP_CHANNEL", False) and hasattr(mod, "check_app_task"):
+        try:
+            return mod.check_app_task(pid)
+        except Exception as e:
+            return {"status": "api_error", "detail": str(e)}
+
     import urllib.request
     import urllib.error
     key = _get_api_key()
@@ -1419,10 +1465,11 @@ def _inspect_task(task_id):
     if script_key not in REGISTRY:
         return {"ok": False, "error": f"脚本不可用: {script_key}"}
     mod = _load_module(REGISTRY[script_key]["module"])
+    _inject_api_key(mod)        # 手动错误查询同样要先注入 Key，否则 301 must not be blank
 
     # ---- 1. 有 pid：查远端 ----
     if pid:
-        st = _check_pid_status(pid)
+        st = _check_pid_status(pid, mod)
         if st["status"] == "success":
             try:
                 saved = _download_from_entry(task_id, mod, st["detail"], pid)
@@ -1432,11 +1479,15 @@ def _inspect_task(task_id):
                 return {"ok": False, "error": f"落盘失败: {e}"}
         if st["status"] == "error":
             with _lock:
-                TASKS[task_id]["status"] = "error"
-                TASKS[task_id]["error"] = f"远端执行失败: {st['detail']}"
+                TASKS[task_id].update({
+                    "status": "error",
+                    "error": f"远端执行失败: {st['detail']}",
+                    "resubmit_pending": True,
+                })
             _save_state()
             return {"ok": True, "action": "remote_error", "pid": pid, "detail": st["detail"],
-                    "msg": "远端已失败，可再次提交"}
+                    "resubmit_pending": True,
+                    "msg": "远端已失败，是否需要重新提交？"}
         if st["status"] in ("pending", "running", "queued"):
             threading.Thread(target=_resume_poll, args=(task_id, mod, pid), daemon=True).start()
             _what = {"pending": "生成中", "running": "生成中", "queued": "排队中"}.get(st["status"], "进行中")
@@ -1450,33 +1501,73 @@ def _inspect_task(task_id):
 
     # ---- 2. 无 pid：自动认领 ----
     if not pid:
-        claim = _claim_runaway_pid(task_id, script_key)
-        if not claim["ok"]:
-            # 认领查询也失败 → 状态未知，绝不重提
-            return {"ok": False, "error": "查询远端队列失败，请稍后重试", "retryable": True}
-        claimed = claim["pid"]
-        if claimed:
-            with _lock:
-                TASKS[task_id]["pid"] = claimed
-            _save_state()
-            st = _check_pid_status(claimed)
-            if st["status"] == "success":
-                try:
-                    saved = _download_from_entry(task_id, mod, st["detail"], claimed)
-                    return {"ok": True, "action": "claimed_pulled", "pid": claimed, "saved": saved,
-                            "msg": f"自动认领远端任务并拉回 {len(saved)} 个产物"}
-                except Exception as e:
-                    return {"ok": False, "error": f"落盘失败: {e}"}
-            if st["status"] == "api_error":
-                return {"ok": False, "error": f"查询认领任务失败（{st['detail']}），请稍后重试", "retryable": True}
-            threading.Thread(target=_resume_poll, args=(task_id, mod, claimed), daemon=True).start()
-            return {"ok": True, "action": "claimed_resumed", "pid": claimed,
-                    "msg": "已自动认领远端任务并恢复轮询，出图自动落盘"}
+        # App 通道没有 /proxy/queue，无法按队列认领。
+        # 但「远端确认无此任务」同样要走第 3 步：挂起询问让用户决定是否重提，
+        # 而不是把任务永远卡在 submitting。
+        if not getattr(mod, "IS_APP_CHANNEL", False):
+            claim = _claim_runaway_pid(task_id, script_key)
+            if not claim["ok"]:
+                # 认领查询也失败 → 状态未知，绝不重提
+                return {"ok": False, "error": "查询远端队列失败，请稍后重试", "retryable": True}
+            claimed = claim["pid"]
+            if claimed:
+                with _lock:
+                    TASKS[task_id]["pid"] = claimed
+                _save_state()
+                st = _check_pid_status(claimed, mod)
+                if st["status"] == "success":
+                    try:
+                        saved = _download_from_entry(task_id, mod, st["detail"], claimed)
+                        return {"ok": True, "action": "claimed_pulled", "pid": claimed, "saved": saved,
+                                "msg": f"自动认领远端任务并拉回 {len(saved)} 个产物"}
+                    except Exception as e:
+                        return {"ok": False, "error": f"落盘失败: {e}"}
+                if st["status"] == "api_error":
+                    return {"ok": False, "error": f"查询认领任务失败（{st['detail']}），请稍后重试", "retryable": True}
+                threading.Thread(target=_resume_poll, args=(task_id, mod, claimed), daemon=True).start()
+                return {"ok": True, "action": "claimed_resumed", "pid": claimed,
+                        "msg": "已自动认领远端任务并恢复轮询，出图自动落盘"}
 
-    # ---- 3. 认领不到：自动重提（仅当确认远端任务不在 → 原任务已丢失才重提）----
-    threading.Thread(target=_run_task, args=(task_id, script_key, params), daemon=True).start()
-    return {"ok": True, "action": "resubmitted",
-            "msg": "远端无匹配任务，已自动重新提交（新任务号会自动接管）"}
+    # ---- 3. 认领不到：不自动重提，挂起询问让用户决定 ----
+    with _lock:
+        TASKS[task_id].update({
+            "status": "error",
+            "error": "远端无此任务（可能已过期或被清理），是否重新提交？",
+            "resubmit_pending": True,
+        })
+    _save_state()
+    return {"ok": True, "action": "resubmit_ask", "resubmit_pending": True,
+            "msg": "远端已无此任务，需要你确认后才会重新提交（会消耗点数）"}
+
+
+def _resubmit_task(task_id):
+    """用户确认后重新提交：清掉 resubmit_pending，重置状态，起后台线程重跑。
+    只有人点了「确认重提」才会走到这里（会消耗点数）。"""
+    with _lock:
+        if task_id not in TASKS:
+            return {"ok": False, "error": f"任务不存在: {task_id}"}
+        t = TASKS[task_id]
+        script_key = t.get("script") or ""
+        params = t.get("params") or {}
+        if not params:
+            return {"ok": False, "error": "任务缺少参数，无法重提，请用「复用」重新填表提交"}
+        t.update({"status": "queued", "pid": None, "error": None,
+                  "resubmit_pending": False, "files": [], "image": None})
+    _save_state()
+    ret_key = script_key
+    ret_params = dict(params)
+    threading.Thread(target=_run_task, args=(task_id, ret_key, ret_params), daemon=True).start()
+    return {"ok": True, "action": "resubmitted", "msg": "已重新提交，新任务号会自动接管"}
+
+
+def _dismiss_resubmit(task_id):
+    """用户选择不重提：只清掉询问标记，任务保持 error"""
+    with _lock:
+        if task_id not in TASKS:
+            return {"ok": False, "error": f"任务不存在: {task_id}"}
+        TASKS[task_id]["resubmit_pending"] = False
+    _save_state()
+    return {"ok": True, "action": "dismissed", "msg": "已保留失败状态，未重新提交"}
 
 
 def _has_active_task():
@@ -1966,6 +2057,29 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 import traceback; traceback.print_exc()
                 self._send(500, {"error": f"错误查询失败: {e}"})
+        elif path == "/api/task/resubmit":
+            try:
+                data = json.loads(raw.decode() or "{}")
+                tid = str(data.get("id") or "").strip()
+                if not tid:
+                    self._send(400, {"error": "缺少任务 id"})
+                    return
+                if _has_active_task():
+                    self._send(400, {"error": "已有任务在运行，请等待完成后再重提"})
+                    return
+                self._send(200, _resubmit_task(tid))
+            except Exception as e:
+                self._send(500, {"error": f"重提失败: {e}"})
+        elif path == "/api/task/resubmit/dismiss":
+            try:
+                data = json.loads(raw.decode() or "{}")
+                tid = str(data.get("id") or "").strip()
+                if not tid:
+                    self._send(400, {"error": "缺少任务 id"})
+                    return
+                self._send(200, _dismiss_resubmit(tid))
+            except Exception as e:
+                self._send(500, {"error": f"操作失败: {e}"})
         elif path == "/api/task/delete":
             try:
                 data = json.loads(raw.decode() or "{}")

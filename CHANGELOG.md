@@ -1,3 +1,44 @@
+## [0.5.4] - 2026-10-22
+### 头条
+- **两个生图工作流换新，又快又省**：Krea2 与 Zimage 全部切到已发布 App 通道（`ai-app/run`），不再走 `/proxy` 自己拼 prompt。
+  - `krea2_t2i` / `krea2_i2i` → **krea2快速省币**（`2113009215693500417`）/ **krea2图生图极速省币**（`2113025166677749762`），实测单张约 30-60 秒、约 5-12 币
+  - 节点结构由 App 锁定，平台改画布也不会再把本地脚本跑挂
+  - 三个 LoRA 槽位（28 画风 / 29 写实 / 30 身材）全部支持运行时换名，不必重发布
+
+### 新增
+- **`scripts/rh_krea2_app.py`**：Krea2 双 App 调用模块（`APP_T2I` / `APP_I2I`），对齐 `rh_zimage_app.py` 的双模结构，`run()` 按有无参考图自动分流。
+- **LoRA 默认强度按 App 分开**（`LORA_DEFAULT_STRENGTH`）：两个 App 是独立发布的，同一槽位默认值并不相同——
+
+  | 槽位 | T2I | I2I |
+  |---|---|---|
+  | 28 画风 | 1.0 | 0.8 |
+  | 29 写实 | 0.5 | 0.6 |
+  | 30 身材 | 0.85 | 1.0 |
+
+  此前误用同一套默认值，「留空沿用发布默认」时 I2I 的画风/身材强度会悄悄偏移。
+- **`sync_defaults()` 自检**：调平台 `apiCallDemo` 拉权威默认值，与本模块写死的值逐项比对，不一致直接报差异。`python3 scripts/rh_krea2_app.py` 即触发。
+- **任务失败后由用户决定是否重提**：新增 `resubmit_pending` 状态与前端确认弹窗（`rsBox`）。
+  - 远端明确失败 / 任务号不存在 → 标记 `error` + 挂起询问，**不再自动重提**
+  - 「确认重提」走 `POST /api/task/resubmit`，「取消」走 `POST /api/task/resubmit/dismiss`
+  - 网络异常（远端状态未知）保持原状态不动，绝不据此重提——避免网络抖动导致同一任务重复扣币
+- **`rh_krea2_app.check_app_task()`**：App 通道任务状态查询，替代 `/proxy/history`。
+
+### 修复
+- **断点续跑全盘失效（严重）**：`_recover_stale_tasks` / `_inspect_task` 查远端前没有注入 API Key，进程重启后模块内 `API_KEY` 为空串，查询恒返回 `301 must not be blank`，被归类为 `api_error` 后走「保持原状态」，任务永远卡在 `submitting`，提交锁一并占死。
+- **`rh_zimage_app` 续跑接口缺失（严重）**：它是 App 通道，但没提供 `IS_APP_CHANNEL` / `check_app_task` / `extract_outputs` / `download_output`。导致其 taskId 被拿去查 `/proxy/history`，永远查不到 → 误判 `not_found`；即便远端有产物也拉不回来。主力方案 `zimage_i2i` 受影响。
+- **ai-app 错误码 `807` 未识别**：`APIKEY_TASK_NOT_FOUND`（任务号不存在/过期/写错）此前被当成网络异常，任务卡死。现归类 `not_found`。
+- **`301` 是复用码，必须按 msg 分流**：`taskId must be positive`（参数脏数据，重试无用）与 `must not be blank`（Key 为空，可重试）此前被一视同仁，前者会让任务永远卡在「进行中」。
+- **App 通道无法走完「询问重提」**：`_inspect_task` 对 App 通道提前 `return`，导致即使识别出 `not_found` 也不会挂起询问，任务停在 `submitting`。
+
+### 技术
+- 契约 B（`ai-app/run`）模块新增硬性要求：`IS_APP_CHANNEL = True` + `check_app_task` + `extract_outputs` + `download_output`，缺任一项都会退化成「拿 taskId 查 /proxy」。
+- `LORA_ALIAS` 简化为「短名 → 文件名」，强度改由 `LORA_DEFAULT_STRENGTH` 按 App 取，避免两处维护。
+- 三份 `webui.html` 与两份 `rh_webui.py` / `rh_krea2_app.py` / `rh_zimage_app.py` 已重新对齐 MD5。
+
+### 文档
+- `runninghub-webui-devdocs` §6：补 A/B 两契约 pid 语义差异、App 通道必备接口、失败不自动重提规则、续跑注入陷阱、错误码补充。
+- `runninghub-recon-api`：补 `807` 与 `301` 分流；标注 `userInfo` 已失效（实测 6 个变体全 404，`/api/user/info` 需网页 Token）；**新增国际站/国内站绝对不可混用警示**（两套独立账号，`.ai` 不可用时宁可关闭功能也不切 `.cn`）。
+
 ## [0.5.3] - 2026-10-18
 ### 新增
 - **OpenAI 兼容接口（`scripts/rh_openai.py`）**：第三方软件（SillyTavern 等）可直接按 OpenAI 协议调用出图，无需了解 RunningHub 自有 API。
