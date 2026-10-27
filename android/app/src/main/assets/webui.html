@@ -2,9 +2,9 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<meta name="version" content="v0.5.10">
+<meta name="version" content="v0.5.11">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>洛宝跑图台 v0.5.10 · RunningHub WebUI</title>
+<title>洛宝跑图台 v0.5.11 · RunningHub WebUI</title>
 <style>
 :root{
   --bg:#0f1115;--card:#171a21;--line:#262b36;--tx:#e6e9ef;--dim:#8b93a7;--acc:#e0a03c;--ok:#4caf7d;--err:#e0564c;
@@ -214,8 +214,6 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 #gateBox h2{font-size:17px;color:var(--acc);margin:0 0 6px;font-weight:700}
 #gateSub{font-size:12px;color:var(--dim);line-height:1.6;margin-bottom:16px}
 #gateErr{font-size:12px;color:var(--err);margin-top:8px;min-height:16px}
-#gateReg{display:block;text-align:center;margin-top:16px;font-size:12px;color:var(--acc);text-decoration:none}
-#gateReg:hover{text-decoration:underline}
 #gateSpin{font-size:12px;color:var(--dim);text-align:center;padding:20px 0}
 .settab{flex:1;background:#0d0f13;border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:6px 0;font-size:12px;cursor:pointer;transition:.15s}
 .settab.active{background:var(--acc);border-color:var(--acc);color:#1a1a1a;font-weight:700}
@@ -236,7 +234,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 </style>
 </head>
 <body>
-<h1>洛宝<span>跑图台</span> <span class="ver">v0.5.10</span></h1>
+<h1>洛宝<span>跑图台</span> <span class="ver">v0.5.11</span></h1>
 <div class="sub">RunningHub 本地统一出图 · Zimage / Krea2 · 任务异步 · 出图直显 <span id="verInfo" style="margin-left:8px;color:var(--acc)"></span>
   <button onclick="reconnectBackend()" style="margin-left:10px;background:#1f2530;border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:700">🔌 连接后端</button>
 </div>
@@ -264,13 +262,13 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
            style="font-size:13px;font-family:monospace;letter-spacing:.5px">
     <button class="btn" id="gateBtn" style="width:100%;margin-top:14px" onclick="gateLogin()">登录</button>
     <div id="gateErr"></div>
-    <button class="btn" id="gateBrowserBtn" onclick="gateBrowserLogin()"
-            style="width:100%;margin-top:8px;background:#2a2f3a;display:none">
-      🌐 在浏览器中登录（自动导入）
-    </button>
-    <a id="gateReg" href="https://www.runninghub.ai" target="_blank" rel="noopener">
-      还没有账号？去 RunningHub 注册 →
+    <a id="gateOfficial" href="https://www.runninghub.ai" target="_blank" rel="noopener"
+       class="btn" style="display:block;width:100%;margin-top:10px;background:#2a2f3a;text-align:center;text-decoration:none;box-sizing:border-box;padding:10px 0">
+      打开官网登录 / 注册 →
     </a>
+    <div id="gateHint" style="font-size:11px;color:var(--dim);margin-top:10px;line-height:1.6">
+      在打开的官网页面里完成登录，返回这里点上面的「登录」即可。
+    </div>
   </div>
 </div>
 <!-- 统一确认/提示弹窗 -->
@@ -1597,8 +1595,21 @@ function gateShow(formReady){
   $('gateSpin').style.display = formReady ? 'none' : 'block';
   $('gateForm').style.display = formReady ? 'block' : 'none';
   if(formReady){
-    const bb = $('gateBrowserBtn');
-    if(bb) bb.style.display = (window.AndroidBridge && window.AndroidBridge.startBrowserLogin) ? 'block' : 'none';
+    // 安卓端：官网链接改为调原生桥，在 App 内打开官网并自动抓取
+    const off = $('gateOfficial');
+    if(off){
+      if(window.AndroidBridge && typeof window.AndroidBridge.startBrowserLogin === 'function'){
+        off.setAttribute('href', '#');
+        off.onclick = (e)=>{ e.preventDefault(); gateOfficialLogin(); };
+        const h = $('gateHint');
+        if(h) h.textContent = '在 App 内打开的官网页面里完成登录，返回后自动导入。';
+      }else{
+        off.setAttribute('href', 'https://www.runninghub.ai');
+        off.onclick = null;
+        const h = $('gateHint');
+        if(h) h.textContent = '在浏览器中完成登录后，回到这里用账号密码登录。';
+      }
+    }
     setTimeout(()=>{ try{ $('gateAcct').focus(); }catch(e){} }, 100);
   }
 }
@@ -1647,11 +1658,11 @@ async function gateLogin(){
   }
 }
 
-// 安卓端：走原生浏览器自动登录（WebView 内登录 RunningHub，再回灌 localStorage）
-function gateBrowserLogin(){
+// 安卓端：在 App 内打开官网，登录后自动抓取 localStorage 回灌
+function gateOfficialLogin(){
   if(window.AndroidBridge && typeof window.AndroidBridge.startBrowserLogin === 'function'){
     $('gateErr').style.color = 'var(--dim)';
-    $('gateErr').textContent = '正在打开浏览器登录…';
+    $('gateErr').textContent = '正在打开 RunningHub…';
     window.AndroidBridge.startBrowserLogin();
   }else{
     $('gateErr').style.color = 'var(--err)';

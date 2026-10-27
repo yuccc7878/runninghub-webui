@@ -215,8 +215,8 @@ class MainActivity : AppCompatActivity() {
     private var loginWebView: WebView? = null
 
     /**
-     * 用独立的 WebView 打开 RunningHub 登录页。
-     * 用户在里面正常登录，成功后从 localStorage 取三件套回灌给主 WebView。
+     * 用独立的 WebView 打开 RunningHub 官网。
+     * 用户在里面正常登录，页面跳转时自动检测 localStorage，取到 token 就关闭并回灌。
      */
     @SuppressLint("SetJavaScriptEnabled")
     private fun openLoginWebView() {
@@ -227,63 +227,63 @@ class MainActivity : AppCompatActivity() {
         lv.settings.databaseEnabled = true
         lv.settings.cacheMode = WebSettings.LOAD_DEFAULT
         lv.settings.userAgentString = lv.settings.userAgentString + " RunningHubShell/1.0"
+
         val dlg = android.app.AlertDialog.Builder(this)
             .setTitle("登录 RunningHub")
             .setView(lv)
             .setNegativeButton("取消") { _, _ -> cleanupLoginWebView() }
-            .setPositiveButton("我已登录，导入", null)
             .create()
-        dlg.setOnShowListener {
-            dlg.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                extractAndImport(lv, dlg)
+
+        // 页面每次加载完成后自动检测一次：登录成功就自动导入，不用手动点按钮
+        lv.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(v: WebView?, url: String?): Boolean = false
+
+            override fun onPageFinished(v: WebView?, url: String?) {
+                super.onPageFinished(v, url)
+                tryAutoImport(lv, dlg)
             }
         }
+        lv.webChromeClient = WebChromeClient()
+
         dlg.setOnDismissListener { cleanupLoginWebView() }
         loginWebView = lv
-        lv.loadUrl("https://www.runninghub.ai/Login/login")
+        // /Login/login 是 SPA 路由，直接打开为空白页；主页有登录按钮可正常弹窗
+        lv.loadUrl("https://www.runninghub.ai")
         dlg.show()
+    }
+
+    /** 页面加载完成后自动探测：拿到 token 就导入并关窗，拿不到就静默等待 */
+    private fun tryAutoImport(lv: WebView, dlg: android.app.AlertDialog) {
+        val js = """(function(){try{
+            return JSON.stringify({
+                url: location.href,
+                token: localStorage.getItem('Rh-Accesstoken')||'',
+                refresh: localStorage.getItem('Rh-Refreshtoken')||'',
+                identify: localStorage.getItem('Rh-Identify')||'',
+                comfy: localStorage.getItem('Rh-Comfy-Auth')||'',
+                comfyExpire: Number(localStorage.getItem('Rh-Comfy-Expire-In')||0),
+                expire: Number(localStorage.getItem('Rh-Expire-In')||0)
+            });
+        }catch(e){return JSON.stringify({url:'', token:''});}})()"""
+        lv.evaluateJavascript(js) { ret ->
+            val raw = try {
+                org.json.JSONTokener(ret).nextValue() as? String ?: ret
+            } catch (e: Throwable) { ret }
+            val obj = try { org.json.JSONObject(raw) } catch (e: Throwable) { null } ?: return@evaluateJavascript
+            val tok = obj.optString("token", "")
+            if (tok.isBlank()) return@evaluateJavascript   // 还没登录，继续等
+            handler.post {
+                dlg.dismiss()
+                webView.evaluateJavascript(
+                    "onBrowserLoginResult(" + org.json.JSONObject.quote(raw) + ")", null)
+            }
+        }
     }
 
     private fun cleanupLoginWebView() {
         try { loginWebView?.destroy() } catch (e: Throwable) {}
         loginWebView = null
     }
-
-    /** 从登录 WebView 的 localStorage 提取三件套，交给前端导入 */
-    private fun extractAndImport(lv: WebView, dlg: android.app.AlertDialog) {
-        val js = """(function(){try{return JSON.stringify({
-            token: localStorage.getItem('Rh-Accesstoken')||'',
-            refresh: localStorage.getItem('Rh-Refreshtoken')||'',
-            identify: localStorage.getItem('Rh-Identify')||'',
-            comfy: localStorage.getItem('Rh-Comfy-Auth')||'',
-            comfyExpire: Number(localStorage.getItem('Rh-Comfy-Expire-In')||0),
-            expire: Number(localStorage.getItem('Rh-Expire-In')||0)
-        });}catch(e){return JSON.stringify({error:e.message});}})()"""
-        lv.evaluateJavascript(js) { ret ->
-            val json = try {
-                org.json.JSONTokener(ret).nextValue() as? String ?: ret
-            } catch (e: Throwable) { ret }
-            if (json.isNullOrBlank() || !json.contains("token")) {
-                handler.post {
-                    android.widget.Toast.makeText(this, "未取到登录信息，请先在页面内完成登录", android.widget.Toast.LENGTH_LONG).show()
-                }
-                return@evaluateJavascript
-            }
-            if (json.contains("\"error\"")) {
-                handler.post {
-                    android.widget.Toast.makeText(this, "读取失败: " + json, android.widget.Toast.LENGTH_LONG).show()
-                }
-                return@evaluateJavascript
-            }
-            handler.post {
-                dlg.dismiss()
-                // 回调前端导入
-                val escaped = org.json.JSONObject.quote(json)
-                webView.evaluateJavascript("onBrowserLoginResult($escaped)", null)
-            }
-        }
-    }
-
     override fun onDestroy() {
         // 释放未完成的文件选择回调，避免 WebView 泄漏
         filePathCallback?.onReceiveValue(null)
