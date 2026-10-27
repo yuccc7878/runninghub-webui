@@ -9,7 +9,7 @@ RunningHub WebUI 是一个基于 RunningHub 的本地统一跑图台，支持文
 
 - **文生图**：输入提示词，一键生成图片（Zimage / Krea2 双引擎）
 - **图生图**：上传参考图，生成相似风格作品，保持角色改姿势/背景
-- **视频生成**：支持 RunningHub 视频生成任务（MiniMaxH3 首尾帧 / 全能视频）
+- **视频生成**：MiniMaxH3 首尾帧 / 双参考图（带人声）、ReActor 只换脸、Wan Animate 2.2 动作迁移
 - **AI 润色**：自动优化提示词，按 t2i / i2i / video 三套分镜规范扩写，提升出图质量
 - **异步任务管理**：任务队列、状态查询、断点续跑、结果下载，历史任务可重跑/删除
 - **本地部署**：支持本地运行，API Key 本地保存，代码零硬编码，数据更安全
@@ -45,25 +45,30 @@ python3 scripts/rh_webui.py --port 8765
 ```
 ├── scripts/               # 服务端与各生成脚本模块
 │   ├── rh_webui.py        # WebUI 服务端（入口）
-│   ├── rh_zimage_api.py   # Zimage 工作流
-│   ├── rh_krea2_nsfw.py   # Krea2 文生图/图生图
+│   ├── rh_zimage_app.py   # Zimage 图生图/文生图（App 通道）
+│   ├── rh_krea2_app.py    # Krea2 图生图/文生图（App 通道）
+│   ├── rh_moss_app.py     # MOSS 八步加速版文生图（App 通道）
+│   ├── rh_illustrious_api.py # Illustrious 二次元文生图
 │   ├── rh_h3_flf_api.py   # MiniMaxH3 首尾帧视频
-│   └── rh_workflow_api.py # MiniMaxH3 全能视频
+│   ├── rh_h3_dual_app.py  # MiniMaxH3 双参考图视频（App 通道）
+│   ├── rh_reactor.py      # ReActor 只换脸
+│   └── rh_wan22.py        # Wan Animate 2.2 动作迁移（App 通道）
 ├── webui.html            # 前端页面（单文件）
 ├── android/              # 安卓壳（Chaquopy + WebView，CI 自动构建 APK）
 ├── refs/                  # 参考图素材库（运行时生成）
 └── workflows/             # 运行时状态、配置与产物（不入库）
 ```
-
 ## 生成脚本一览
-
 | 脚本 | 模式 | 说明 |
 |---|---|---|
 | Zimage 图生图/文生图 | I2I + T2I | 选参考图=图生图，纯提示词=文生图 |
-| Krea2 文生图 | T2I | Krea2 底模，支持权重语法 `(词:1.5)` |
-| Krea2 图生图 | I2I | 参考图注入保持角色，改姿势/背景 |
+| Krea2 图生图/文生图 | I2I + T2I | 三个 LoRA 位可在运行时换名 |
+| MOSS 八步加速版 | T2I | 8 步约 33 秒 / 4 步约 12 秒 |
+| Illustrious 二次元 | T2I | WAI-illustrious-SDXL 底模 |
 | MiniMaxH3 首尾帧视频 | I2V | 首帧(→尾帧)生成视频，支持续接 |
-| MiniMaxH3 全能视频 | T2V / omni | 文生视频 / 参考图驱动 |
+| MiniMaxH3 双参考图视频 | I2V | 两张参考图 + 提示词 → 带同期人声的视频 |
+| ReActor 只换脸 | Video | 像素级换脸，身体/背景不动 |
+| Wan Animate 2.2 | Video | 参考图定身份，源视频定动作 |
 
 ## 📱 Android 客户端
 

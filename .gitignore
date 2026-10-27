@@ -18,6 +18,8 @@ refs/*
 !refs/.gitkeep
 
 # ---- 密钥/本地配置 ----
+workflows/session.json
+workflows/session.tmp*
 *.key
 .env
 
@@ -31,3 +33,29 @@ android/local.properties
 *.jks
 # git 备份目录（不入库）
 .backup/
+# ---- 本地临时产物（不入库） ----
+builds/
+*.bak_*
+webui.html.bak*
+# ---- 一次性调试脚本（含本机绝对路径，不入库） ----
+scripts/gen_2refs.py
+scripts/gen_2refs_v2.py
+scripts/gen_maid_photo.py
+scripts/upload_refs.py
+scripts/inspect_embedded.py
+scripts/patch_webui_h3dual.py
+webui_serve.py
+workflows/wananimate/*.py
+# ---- 一次性逆向/调试产物（不入库） ----
+lightx2v_clean.json
+scripts/rh_session_test.py
+scripts/session_test.html
+workflows/incoming_zimage_reverse.json
+workflows/legacy_zimage_*_api.json
+workflows/zimage_10node_ui.json
+workflows/zimage_api_format.json
+workflows/zimage_ui_format.json
+workflows/wananimate/
+
+# ---- 本地 skill（逆向笔记，不入库） ----
+skills/

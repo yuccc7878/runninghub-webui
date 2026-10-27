@@ -1,27 +1,48 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RunningHub · Wan Animate 2.2 动作迁移（平台托管版）
+RunningHub · Wan Animate 2.2 动作迁移（App 通道版）
 ==================================================
-工作流：2110720306189381634（平台托管，走 getJsonApiFormat API 实时拉取，
-        不依赖本地 JSON 打包，安卓/本地行为一致）
+AI 应用：2113761739660918785「wan2.2动作迁移」
+画布工作流：2113394019006259202（V3）
+
+通道说明
+--------
+走 App 通道（/task/openapi/ai-app/run + nodeInfoList），不是 proxy /prompt。
+原因：App 通道按 webappId 调用，只提交「发布时暴露的字段」，
+      节点内部结构由平台锁定，不会被改坏，也更适合对外提供稳定接口。
+
+暴露字段（/api/webapp/detail → inputNodes，实测）
+    57  image     参考图（决定身份：脸/发型/服装）
+    63  video     源视频（决定动作/姿态/镜头）
+    190 prompt    提示词（发布默认值可能被 App 层覆盖）
+    216 int       人脸增强开关：1=开（推荐） / 0=关
+
+分辨率与朝向
+------------
+画布内已改为「自动判断」，按源视频宽高比自动决定输出：
+    源视频宽 > 高  → 832x480（横屏）
+    否则           → 480x832（竖屏）
+    其他比例（4:3 / 1:1 / 21:9）→ 归到上面两档之一，用 crop 裁切填满，
+    不拉伸、不变形。
+因为 width/height 没有暴露成 App 输入，所以 App 通道无法手动指定分辨率，
+这是有意为之：避免用户填出 OOM 的尺寸。
 
 技术路线：生成式角色替换
   - 参考图决定「身份」（脸/发型/服装）
-  - 源视频决定「动作」（骨骼 + 人脸检测驱动）
+  - 源视频决定「动作」（vitpose_h_wholebody 骨骼 + yolov10m 人脸）
   - ⚠️ 会连同服装/背景一起重画（区别于 ReActor 的像素级只换脸）
 
-核心节点：WanVideoAnimateEmbeds(62) ← ClipVision(70) + 骨骼检测(211) + 人脸检测(213)
-产物：默认只出 1 份主产物 [30]（带音轨）；compare=True 时额外保留对比条 [201]
+后处理：12fps 抽帧 → Wan 采样 → RIFE×2 补帧 → 24fps 输出，保留原音轨。
+帧数按 4n+1 对齐（Wan 模型要求），会有轻微裁剪。
 
-相比作者原版的改动：
-  1. [216] index 0→1：启用 face_images 人脸增强（作者默认走黑图关闭，实测开启后相似度更好）
-  2. 默认删除 [201]（对比拼接条），只出一份；compare=True 才保留
-  3. [112] 人脸检测预览节点 save_output=false，不产出，始终保留（不影响产物数）
-  4. 分辨率：[184]=宽、[183]=高（已实证：VHS_LoadVideo.custom_width←184 / custom_height←183）
-     ⚠️ 注意 183/184 与「数字大小顺序」直觉相反，改错会导致宽高颠倒
+实测耗时（Standard 模式，10 秒输入）
+    10s 竖屏 → 输出 9.75s / 234 帧 → 7 分 53 秒
+    10s 横屏 → 输出 9.71s / 233 帧 → 8 分 37 秒
+    约 50 秒 / 每输出秒，线性增长。
 """
 import json
+import os
 import time
 import uuid
 import urllib.request
@@ -31,338 +52,340 @@ from pathlib import Path
 # ==================== 配置 ====================
 API_KEY = ""   # 由 webui 运行时注入
 BASE = "https://www.runninghub.ai"
-PROXY = f"{BASE}/proxy/{API_KEY}"
 
-WORKFLOW_ID = "2110720306189381634"
+# AI 应用 ID（App 通道用这个，不是工作流 ID）
+APP_ID = "2113761739660918785"
+# 画布工作流 ID（仅作记录，App 通道不直接用）
+WORKFLOW_ID = "2113394019006259202"
 
-# 节点 ID（来自平台 getJsonApiFormat）
+# App 暴露的节点字段（来自 /api/webapp/detail）
 NODE = {
     "ref_image": "57",     # LoadImage（参考图 / 身份）
     "ref_video": "63",     # VHS_LoadVideo（源视频 / 动作）
-    "w": "184",            # JWInteger：宽（实证：custom_width←184）
-    "h": "183",            # JWInteger：高（实证：custom_height←183）
-    "resize": "64",        # ImageResizeKJv2
-    "clipvis": "70",       # WanVideoClipVisionEncode
-    "face_sw": "214",      # easy anythingIndexSwitch（人脸增强开关）
-    "face_idx": "216",     # Primitive integer：0=黑图(关) / 1=真实人脸(开)
     "prompt": "190",       # CR Prompt Text
-    "sampler": "27",       # WanVideoSampler
-    "out_main": "30",      # VHS_VideoCombine：⚠️ 实为「产物+素材条」横向拼接版（[66] concat，宽会变大），带音轨
-    "out_cmp": "201",      # VHS_VideoCombine：纯净产物（images←[28] 直连 decode），无音轨
-    "out_face": "112",     # VHS_VideoCombine 人脸检测预览（save_output=false）
+    "face_idx": "216",     # Primitive integer：0=关 / 1=开
 }
+
+# 返回码
+CODE_OK = 0
+CODE_QUEUE_MAXED = 421    # 队列已满，可重试
+CODE_FAILED = 805         # 任务执行失败
 
 # 通用预置提示词（留空时自动使用）
-# 目标：让参考图的人物「复刻示例视频里的服装 + 动作姿态」，不带入多余场景设定
+# 目标：复刻示例视频里的动作姿态与镜头，身份来自参考图
 DEFAULT_PROMPT = (
-    "参考图中的人物，完整复刻示例视频里人物的服装、动作与姿态。"
-    "保持与示例视频完全一致的穿着（款式、颜色、长短一致），"
-    "并保持示例视频中的身体动作、手势、走位与镜头节奏一致；"
-    "人物身份（脸、发型、体型）来自参考图，其余画面元素以示例视频为准。"
+    "参考图中的人物，完整复刻示例视频里人物的动作、姿态与镜头节奏；"
+    "保持人物外貌、发型、服装与参考图一致；保留示例视频中的道具与手持物品。"
 )
-
-# 分辨率档位（宽 x 高）
-RES_PRESETS = {
-    "480x832": (480, 832),
-    "544x960": (544, 960),
-    "640x640": (640, 640),
-    "832x480": (832, 480),
-}
 
 
 # ==================== 基础请求 ====================
-def _request(url, method="GET", body=None, timeout=120):
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("accept", "application/json")
-    if body is not None:
-        req.add_header("content-type", "application/json")
-    req.add_header("Authorization", API_KEY)
-    resp = urllib.request.urlopen(req, timeout=timeout)
-    return json.loads(resp.read().decode())
+def _post(path, body, timeout=40):
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(
+        f"{BASE}{path}", data=data, method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {API_KEY}"},
+    )
+    try:
+        return json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode())
+        except Exception:
+            return {"code": e.code, "msg": f"HTTP {e.code}"}
+    except Exception as e:
+        return {"code": -1, "msg": str(e)}
 
 
-def _upload(path, field="image", ct=None):
-    """multipart 上传，返回 ComfyUI 文件名。
+# ==================== 上传 ====================
+def upload_media(file_path, file_type="image"):
+    """上传素材到 openapi 空间，返回 fileName（可直接写进 image / video 字段）。
 
-    ⚠️ 实证（2026-10-15）：平台只有 /proxy/<key>/upload/image 一个上传端点，
-       upload/video 返回 404 NOT_FOUND。视频也走这个端点，且字段名必须是 image。
-       所以这里忽略传入的 field，统一用 image。
+    file_type: "image" 或 "video"
     """
-    path = str(path)
-    if ct is None:
-        low = path.lower()
-        if low.endswith(".mp4"):
-            ct = "video/mp4"
-        elif low.endswith(".png"):
-            ct = "image/png"
-        elif low.endswith(".webp"):
-            ct = "image/webp"
-        else:
-            ct = "image/jpeg"
-    field = "image"     # 平台只认这个字段名（video 会 400）
-    data = Path(path).read_bytes()
+    p = Path(str(file_path))
+    if not p.exists():
+        raise FileNotFoundError(f"文件不存在: {file_path}")
+
+    suffix = p.suffix.lower()
+    if suffix == ".png":
+        ctype = "image/png"
+    elif suffix == ".webp":
+        ctype = "image/webp"
+    elif suffix in (".mp4",):
+        ctype = "video/mp4"
+    elif suffix in (".mov",):
+        ctype = "video/quicktime"
+    else:
+        ctype = "image/jpeg"
+
+    data = p.read_bytes()
     boundary = uuid.uuid4().hex
-    body = b""
-    body += f"--{boundary}\r\n".encode()
-    body += (f'Content-Disposition: form-data; name="{field}"; '
-             f'filename="{Path(path).name}"\r\n').encode()
-    body += f"Content-Type: {ct}\r\n\r\n".encode()
-    body += data + b"\r\n"
-    body += f"--{boundary}--\r\n".encode()
-    req = urllib.request.Request(f"{PROXY}/upload/image", data=body, method="POST")
-    req.add_header("accept", "application/json")
-    req.add_header("content-type", f"multipart/form-data; boundary={boundary}")
-    req.add_header("Authorization", API_KEY)
-    resp = urllib.request.urlopen(req, timeout=180)
-    d = json.loads(resp.read().decode())
-    # 错误码检查（如 809 APIKEY_FILE_SIZE_EXCEEDED）
-    if isinstance(d, dict) and d.get("code") not in (None, 0, 200):
-        raise RuntimeError(f"上传失败: code={d.get('code')} msg={d.get('msg')}")
-    name = d.get("name") if isinstance(d, dict) else None
+    parts = []
+    for name, val in (("apiKey", API_KEY), ("fileType", file_type)):
+        parts.append(
+            f'--{boundary}\r\n'
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n{val}\r\n'.encode()
+        )
+    parts.append(
+        f'--{boundary}\r\n'
+        f'Content-Disposition: form-data; name="file"; filename="{p.name}"\r\n'
+        f'Content-Type: {ctype}\r\n\r\n'.encode() + data + b"\r\n"
+    )
+    parts.append(f"--{boundary}--\r\n".encode())
+
+    req = urllib.request.Request(
+        f"{BASE}/task/openapi/upload", data=b"".join(parts), method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    d = json.loads(urllib.request.urlopen(req, timeout=300).read().decode())
+    if d.get("code") != CODE_OK:
+        raise RuntimeError(f"上传失败: {json.dumps(d, ensure_ascii=False)[:300]}")
+    name = (d.get("data") or {}).get("fileName")
     if not name:
         raise RuntimeError(f"上传返回异常: {str(d)[:200]}")
     return name
 
 
 def upload_image(p):
-    return _upload(p, "image")
+    return upload_media(p, "image")
 
 
 def upload_video(p):
-    return _upload(p, "video", "video/mp4")
+    return upload_media(p, "video")
 
 
-# ==================== 1. 拉取工作流（平台托管，实时） ====================
-def get_workflow_prompt(workflow_id=WORKFLOW_ID) -> dict:
-    """从平台拉取 API format（实时，不依赖本地 JSON 打包）"""
-    d = _request(
-        f"{BASE}/api/openapi/getJsonApiFormat",
-        method="POST",
-        body={"apiKey": API_KEY, "workflowId": str(workflow_id)},
-        timeout=60,
-    )
-    if d.get("code") != 0:
-        raise RuntimeError(f"getJsonApiFormat 失败: code={d.get('code')} msg={d.get('msg')}")
-    p = d["data"]["prompt"]
-    # 平台返回可能是 JSON 字符串，需二次解析
-    if isinstance(p, str):
-        p = json.loads(p)
-    return p
+# ==================== App 详情 ====================
+def webapp_detail(webapp_id=APP_ID):
+    """拉 App 详情（暴露字段 + 默认值）。失败返回 {}"""
+    d = _post("/api/webapp/detail", {"webappId": webapp_id}, timeout=30)
+    if d.get("code") != CODE_OK:
+        return {}
+    return d.get("data") or {}
 
 
-# ==================== 2. 构造 prompt ====================
-def build_prompt(
-    prompt: dict,
-    ref_image_fn: str,
-    ref_video_fn: str,
-    width: int = 480,
-    height: int = 832,
-    prompt_text: str = None,
-    face_enhance: bool = True,
-    compare: bool = False,
-    seed: int = None,
-    steps: int = None,
-) -> dict:
-    """在平台原始 prompt 上改参数。
+def exposed_fields(webapp_id=APP_ID):
+    """返回该 App 实际暴露的 {(nodeId, fieldName)} 集合"""
+    data = webapp_detail(webapp_id)
+    ins = data.get("inputNodes") or []
+    return {(str(n.get("nodeId")), n.get("fieldName")) for n in ins}
 
-    compare=False → 删除 [201] 对比条，只出 [30] 主产物（1 份）
-    compare=True  → 保留 [201]，出 2 份
+
+# ==================== 构造 nodeInfoList ====================
+def build_node_info(image=None, video=None, prompt_text=None,
+                    face_enhance=True, fields=None, webapp_id=APP_ID):
+    """构造 nodeInfoList。
+
+    只提交 App 真正暴露的字段——提交未暴露字段会被平台忽略或报错。
+    width/height 未暴露，分辨率由画布内的自适应逻辑按源视频决定。
     """
-    p = json.loads(json.dumps(prompt))   # 深拷贝，不污染缓存
+    if fields is None:
+        fields = exposed_fields(webapp_id)
 
-    # --- 输入素材 ---
-    p[NODE["ref_image"]]["inputs"]["image"] = ref_image_fn
-    p[NODE["ref_video"]]["inputs"]["video"] = ref_video_fn
-
-    # --- 分辨率（183=高, 184=宽） ---
-    p[NODE["h"]]["inputs"]["value"] = int(height)
-    p[NODE["w"]]["inputs"]["value"] = int(width)
-    if NODE["resize"] in p:
-        p[NODE["resize"]]["inputs"]["width"] = [NODE["w"], 0]
-        p[NODE["resize"]]["inputs"]["height"] = [NODE["h"], 0]
-
-    # --- 人脸增强开关：1=启用真实人脸检测，0=黑图（作者默认） ---
-    p[NODE["face_idx"]]["inputs"]["int"] = 1 if face_enhance else 0
-
-    # --- 提示词（留空则用通用预置词） ---
-    if prompt_text and str(prompt_text).strip():
-        p[NODE["prompt"]]["inputs"]["prompt"] = str(prompt_text).strip()
-    elif DEFAULT_PROMPT:
-        p[NODE["prompt"]]["inputs"]["prompt"] = DEFAULT_PROMPT
-
-    # --- 采样（可选覆盖） ---
-    if NODE["sampler"] in p:
-        s = p[NODE["sampler"]]["inputs"]
-        if seed is not None:
-            s["seed"] = int(seed)
-        if steps is not None:
-            s["steps"] = int(steps)
-
-    # --- 产物裁剪 ---
-    # 实证（2026-10-15）：
-    #   [30]  images ← [66] ImageConcatMulti(direction=left) = 「产物 + 素材条」横向拼接，宽度会变大（480→614）
-    #   [201] images ← [28] 直连 decode = 纯净产物，尺寸严格等于设定分辨率
-    # 所以：默认只出 [201]（纯净产物），compare=True 才额外保留 [30]（拼接对比版）。
-    # [201] 默认无音轨，这里把 [63] 的音轨接上。
-    if NODE["out_cmp"] in p:
-        p[NODE["out_cmp"]]["inputs"].setdefault("audio", [NODE["ref_video"], 2])
-    if not compare:
-        p.pop(NODE["out_main"], None)     # 删掉拼接版，只留纯净产物
-
-    return p
-
-
-# ==================== 3. 提交 / 轮询 / 下载 ====================
-def submit_prompt(prompt: dict, client_id: str = "") -> str:
-    body = {"prompt": prompt, "client_id": client_id or uuid.uuid4().hex}
-    d = _request(f"{PROXY}/prompt", method="POST", body=body, timeout=120)
-    return d.get("prompt_id") or d.get("node_id") or d.get("id")
-
-
-def poll_history(prompt_id, timeout=3600, interval=10, on_ping=None):
-    """轮询直到完成/失败。返回 history entry。"""
-    t0 = time.time()
-    while True:
-        try:
-            d = _request(f"{PROXY}/history/{prompt_id}", timeout=60)
-            entry = (d or {}).get(prompt_id) or (d or {}).get(str(prompt_id))
-            if entry:
-                st = (entry.get("status") or {}).get("status_str")
-                if st in ("success", "error"):
-                    return entry
-                if entry.get("outputs"):
-                    return entry
-        except urllib.error.HTTPError:
-            pass
-        except Exception:
-            pass
-        if time.time() - t0 > timeout:
-            raise TimeoutError(f"轮询超时 {timeout}s: {prompt_id}")
-        if on_ping:
-            try:
-                on_ping(int(time.time() - t0))
-            except Exception:
-                pass
-        time.sleep(interval)
-
-
-def extract_outputs(entry) -> list:
-    """从 history entry 提取产物（只取视频，跳过中间 png）"""
     out = []
-    for _nid, node_out in (entry.get("outputs") or {}).items():
-        for k in ("gifs", "videos", "images", "audio"):
-            for item in (node_out.get(k) or []):
-                fn = item.get("filename")
-                if not fn:
-                    continue
-                if fn.lower().endswith((".mp4", ".webm", ".mov")):
-                    out.append({
-                        "filename": fn,
-                        "objectKey": item.get("objectKey") or item.get("file_path") or fn,
-                        "type": item.get("type", "output"),
-                        "kind": "video",
-                    })
+
+    def add(nid, fname, val):
+        if val is None or val == "":
+            return
+        if (str(nid), fname) in fields:
+            out.append({"nodeId": str(nid), "fieldName": fname,
+                        "fieldValue": str(val)})
+
+    add(NODE["ref_image"], "image", image)
+    add(NODE["ref_video"], "video", video)
+
+    # 提示词：留空则用通用预置词
+    txt = (prompt_text or "").strip() or DEFAULT_PROMPT
+    add(NODE["prompt"], "prompt", txt)
+
+    # 人脸增强：1=开 / 0=关
+    add(NODE["face_idx"], "int", 1 if face_enhance else 0)
+
     return out
 
 
-def download_output(output, dest_dir="."):
-    """下载产物到 dest_dir，返回本地路径"""
+# ==================== 提交 / 轮询 / 下载 ====================
+def submit(node_info_list, webapp_id=APP_ID, retry=5, retry_wait=20):
+    """提交任务，返回 taskId。队列满（421）自动重试。"""
+    body = {"webappId": webapp_id, "apiKey": API_KEY,
+            "nodeInfoList": node_info_list}
+    last = None
+    for i in range(retry):
+        d = _post("/task/openapi/ai-app/run", body, timeout=60)
+        code = d.get("code")
+        if code == CODE_OK:
+            tid = (d.get("data") or {}).get("taskId")
+            if not tid:
+                raise RuntimeError(f"未返回 taskId: {d}")
+            return tid
+        last = d
+        if code == CODE_QUEUE_MAXED and i < retry - 1:
+            print(f"[队列满] 第 {i + 1} 次重试，{retry_wait}s 后再试")
+            time.sleep(retry_wait)
+            continue
+        break
+    raise RuntimeError(f"提交失败: {json.dumps(last, ensure_ascii=False)[:400]}")
+
+
+class PollTimeout(Exception):
+    """轮询超时，任务可能仍在远端正跑"""
+
+
+def poll(task_id, max_wait=3600, interval=10, verbose=True, on_ping=None):
+    """轮询到完成，返回产物列表 [{fileUrl, fileType, ...}]"""
+    t0 = time.time()
+    last_ping = 0
+    while time.time() - t0 < max_wait:
+        d = _post("/task/openapi/outputs",
+                  {"taskId": task_id, "apiKey": API_KEY}, timeout=40)
+        code = d.get("code")
+        if code == CODE_OK:
+            return d.get("data") or []
+        if code == CODE_FAILED:
+            fr = (d.get("data") or {}).get("failedReason") or {}
+            node = fr.get("node_name") or "?"
+            etype = fr.get("exception_type") or "?"
+            tb = fr.get("traceback") or ""
+            if isinstance(tb, str):
+                try:
+                    tb = json.loads(tb)
+                except Exception:
+                    pass
+            if isinstance(tb, list):
+                tb = "\n".join(str(x) for x in tb)
+            tail = tb.strip().splitlines()[-1] if tb.strip() else ""
+            raise RuntimeError(f"任务失败 [{node}] {etype}: {tail[:300]}")
+
+        elapsed = int(time.time() - t0)
+        if on_ping and elapsed - last_ping >= 30:
+            last_ping = elapsed
+            try:
+                on_ping(elapsed)
+            except Exception:
+                pass
+        elif verbose and elapsed % 60 < interval:
+            print(f"[轮询] {elapsed}s code={code}")
+        time.sleep(interval)
+
+    raise PollTimeout(f"轮询超时 {max_wait}s: {task_id}")
+
+
+def extract_videos(items):
+    """从产物列表挑出视频"""
+    out = []
+    for it in items or []:
+        url = it.get("fileUrl") or it.get("file_url") or ""
+        if not url:
+            continue
+        low = url.split("?")[0].lower()
+        if low.endswith((".mp4", ".webm", ".mov")):
+            out.append(it)
+    return out
+
+
+def download_video(item, dest_dir="."):
+    """下载视频产物到 dest_dir，返回本地路径"""
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / Path(output["filename"]).name
-    key = output.get("objectKey") or output["filename"]
-    url = f"https://rh-hk-images.xiaoyaoyou.com/{key}" if not key.startswith("http") else key
-    req = urllib.request.Request(url)
-    req.add_header("Authorization", API_KEY)
-    with urllib.request.urlopen(req, timeout=300) as r, open(dest, "wb") as f:
+    url = item.get("fileUrl") or item.get("file_url")
+    name = os.path.basename(url.split("?")[0]) or f"out_{int(time.time())}.mp4"
+    dest = dest_dir / name
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=600) as r, open(dest, "wb") as f:
         f.write(r.read())
     return str(dest)
 
 
-# ==================== 4. 一键跑 ====================
+# ==================== 一键跑 ====================
 def run(
     ref_image_path: str,
     ref_video_path: str,
-    width: int = 480,
-    height: int = 832,
     prompt_text: str = None,
     face_enhance: bool = True,
-    compare: bool = False,
-    seed: int = None,
-    steps: int = None,
-    workflow_id: str = WORKFLOW_ID,
+    webapp_id: str = APP_ID,
     download_dir: str = ".",
     on_submit=None,
     on_ping=None,
+    verbose: bool = True,
 ) -> dict:
-    """完整流程：上传 → 拉工作流 → 改参 → 提交 → 轮询 → 下载"""
-    print("=" * 60)
-    print(f"[Wan Animate 2.2] 分辨率 {width}x{height} | 人脸增强={'开' if face_enhance else '关'} | 对比条={'开' if compare else '关'}")
+    """完整流程：上传 → 构造 → 提交 → 轮询 → 下载
+
+    分辨率不在这里指定：画布内按源视频宽高比自动决定（横屏 832x480 / 竖屏 480x832）。
+    """
+    if verbose:
+        print("=" * 60)
+        print(f"[Wan Animate 2.2 · App] app={webapp_id} | 人脸增强={'开' if face_enhance else '关'}")
+        print("  分辨率：自动（横屏 832x480 / 竖屏 480x832）")
 
     # 1. 上传
     img_fn = upload_image(ref_image_path)
-    print(f"  参考图已上传: {img_fn}")
+    if verbose:
+        print(f"  参考图已上传: {img_fn}")
     vid_fn = upload_video(ref_video_path)
-    print(f"  源视频已上传: {vid_fn}")
+    if verbose:
+        print(f"  源视频已上传: {vid_fn}")
 
-    # 2. 拉取工作流（平台实时）
-    base = get_workflow_prompt(workflow_id)
-    print(f"  工作流节点: {len(base)}")
+    # 2. 构造 nodeInfoList
+    fields = exposed_fields(webapp_id)
+    if verbose:
+        print(f"  暴露字段: {sorted(fields)}")
+    ni = build_node_info(img_fn, vid_fn, prompt_text=prompt_text,
+                         face_enhance=face_enhance,
+                         fields=fields, webapp_id=webapp_id)
+    if verbose:
+        print(f"  提交字段数: {len(ni)}")
+        for x in ni:
+            v = x["fieldValue"]
+            if len(str(v)) > 60:
+                v = str(v)[:60] + "..."
+            print(f"    [{x['nodeId']}] {x['fieldName']} = {v}")
 
-    # 3. 构造
-    p = build_prompt(base, img_fn, vid_fn, width=width, height=height,
-                     prompt_text=prompt_text, face_enhance=face_enhance,
-                     compare=compare, seed=seed, steps=steps)
-    print(f"  提交节点: {len(p)}")
-
-    # 4. 提交
-    pid = submit_prompt(p)
-    print(f"  已提交: prompt_id={pid}")
+    # 3. 提交
+    tid = submit(ni, webapp_id=webapp_id)
+    if verbose:
+        print(f"  已提交: taskId={tid}")
     if on_submit:
         try:
-            on_submit(pid)
+            on_submit(tid)
         except Exception:
             pass
 
-    # 5. 轮询
-    entry = poll_history(pid, on_ping=on_ping)
-    st = (entry.get("status") or {}).get("status_str")
-    if st == "error":
-        msgs = (entry.get("status") or {}).get("messages") or []
-        for m in msgs:
-            if m and m[0] == "execution_error":
-                raise RuntimeError(f"执行失败: {json.dumps(m[1], ensure_ascii=False)[:800]}")
-        raise RuntimeError("执行失败（无详情）")
-    print(f"  执行完成: {st}")
+    # 4. 轮询
+    items = poll(tid, verbose=verbose, on_ping=on_ping)
+    videos = extract_videos(items)
+    if verbose:
+        print(f"  产物: {len(items)} 项，其中视频 {len(videos)} 个")
 
-    # 6. 下载（只取视频）
-    outputs = extract_outputs(entry)
-    print(f"  产物: {len(outputs)} 个")
+    # 5. 下载
     saved = []
-    for o in outputs:
-        path = download_output(o, download_dir)
+    for v in videos:
+        path = download_video(v, download_dir)
         saved.append(path)
-        print(f"    ↓ {path}")
-    return {"prompt_id": pid, "outputs": outputs, "videos": saved}
+        if verbose:
+            print(f"    ↓ {path}")
+
+    return {"task_id": tid, "items": items, "videos": saved}
 
 
 # ==================== CLI ====================
 if __name__ == "__main__":
     import argparse
-    ap = argparse.ArgumentParser(description="Wan Animate 2.2 动作迁移")
+
+    ap = argparse.ArgumentParser(description="Wan Animate 2.2 动作迁移（App 通道）")
     ap.add_argument("--image", required=True, help="参考图（身份）")
     ap.add_argument("--video", required=True, help="源视频（动作）")
-    ap.add_argument("--res", default="480x832", choices=list(RES_PRESETS), help="分辨率")
-    ap.add_argument("--prompt", default=None, help="提示词（描述场景动作）")
+    ap.add_argument("--prompt", default=None, help="提示词，留空用默认")
     ap.add_argument("--no-face", action="store_true", help="关闭人脸增强")
-    ap.add_argument("--compare", action="store_true", help="额外输出对比条")
-    ap.add_argument("--seed", type=int, default=None)
-    ap.add_argument("--steps", type=int, default=None)
-    ap.add_argument("--out", default="./out")
+    ap.add_argument("--out", default="./out", help="下载目录")
     a = ap.parse_args()
-    w, h = RES_PRESETS[a.res]
-    r = run(a.image, a.video, w, h, a.prompt,
-            face_enhance=not a.no_face, compare=a.compare,
-            seed=a.seed, steps=a.steps, download_dir=a.out)
+
+    # 仓库根优先，且允许 RH_BASE 覆写；找不到则保持 API_KEY 为空（由 webui 运行时注入）
+    key_file = Path(os.environ.get("RH_BASE")
+                    or Path(__file__).resolve().parent.parent) / "workflows" / "api_key.json"
+    if key_file.exists() and not API_KEY:
+        API_KEY = json.loads(key_file.read_text()).get("api_key", "")
+
+    r = run(a.image, a.video, prompt_text=a.prompt,
+            face_enhance=not a.no_face, download_dir=a.out)
     print("\n完成:", r["videos"])

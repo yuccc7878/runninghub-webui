@@ -334,7 +334,7 @@ def _restart_backend():
 # 更新检测（v0.5.1）：GitHub 最新 Release vs 当前版本
 # 免 API 方案：latest 重定向 → 解析 tag，绕开 GitHub API 限流(60次/h)
 # ============================================================
-CUR_VERSION = "0.5.5"          # 当前版本号（build.gradle versionName）
+CUR_VERSION = "0.5.9"          # 当前版本号（build.gradle versionName）
 _UPDATE_CACHE = {"ts": 0, "data": None}   # 15 分钟缓存，避免频繁打外网
 
 def _version_tuple(v):
@@ -434,7 +434,7 @@ def _inject_api_key(mod):
         return False
     mods = [mod]
     # 无论传哪个模块，都把所有底层脚本模块一起注入，避免跨模块调用漏注入
-    for mname in ("rh_zimage_app", "rh_zimage_api", "rh_krea2_app", "rh_krea2_nsfw", "rh_h3_flf_api", "rh_workflow_api", "rh_wan22", "rh_reactor"):
+    for mname in ("rh_zimage_app", "rh_zimage_api", "rh_krea2_app", "rh_krea2_nsfw", "rh_h3_flf_api", "rh_h3_dual_app", "rh_workflow_api", "rh_wan22", "rh_reactor", "rh_illustrious_api", "rh_moss_app"):
         try:
             m = importlib.import_module(mname)
             if m not in mods:
@@ -451,7 +451,191 @@ def _inject_api_key(mod):
                 m.PROXY = f"{m.BASE}/proxy/{key}" if hasattr(m, "BASE") else f"https://www.runninghub.ai/proxy/{key}"
         except Exception:
             pass
+    # 每次注入都顺手确保 session 通道已挂上（幂等，开销极小）
+    try:
+        _install_session_channel()
+    except Exception:
+        pass
     return True
+
+
+# ==================== session 通道接管 ====================
+# 实测（2026-10-28）：/task/openapi/* 是 API Key 专用通道，平台不计入
+# App 运行次数与创作者收益；网页端 /task/webapp/* 计 session 通道会计入。
+# 做法：不改 11 个业务模块，只替换它们的底层请求函数，把 openapi 请求
+# 翻译成 session 请求。业务模块完全无感知。
+
+_SESSION_SHIM_MARK = "_rh_session_shim"
+
+# 走 App 通道、需要翻译成 session 的路径
+_APP_RUN_PATHS = ("/task/openapi/ai-app/run",)
+_APP_OUT_PATHS = ("/task/openapi/outputs",)
+
+
+def _session_translate(path, body):
+    """把 openapi 请求翻译成 session 通道调用。
+
+    返回 (handled, result_dict)。result_dict 保持模块原本期望的
+    {"code":0,"data":{...}} 形态，让业务模块零改动。
+    """
+    try:
+        import rh_session_channel as SC
+    except Exception:
+        return False, None
+
+    if not SC.is_configured():
+        return False, None     # 未配置会话 -> 交回原 openapi 逻辑（兜底）
+
+    b = body or {}
+
+    # ---- 提交任务 ----
+    if path in _APP_RUN_PATHS:
+        webapp_id = b.get("webappId")
+        node_list = b.get("nodeInfoList") or b.get("inputs") or []
+        if not webapp_id:
+            return False, None
+        try:
+            tid, raw = SC.create_task(webapp_id, node_list)
+        except Exception as e:
+            return True, {"code": 805, "msg": str(e), "data": None}
+        return True, {"code": 0, "msg": "success",
+                      "data": {"taskId": tid, "taskStatus": "RUNNING",
+                               "clientId": raw.get("clientId")}}
+
+    # ---- 查询产物 ----
+    if path in _APP_OUT_PATHS:
+        tid = b.get("taskId")
+        if not tid:
+            return False, None
+        r = SC.query_outputs(tid, b.get("webappId"))
+        if r.get("error"):
+            return True, {"code": -1, "msg": r["error"], "data": None}
+        st = r.get("status")
+        code = r.get("code")
+        if st == "SUCCESS":
+            outs = r.get("outputs") or []
+            return True, {"code": 0, "msg": "success", "data": outs}
+        if st == "FAILED":
+            return True, {"code": 805, "msg": "任务失败",
+                          "data": {"taskId": tid, "taskStatus": r.get("rawStatus")}}
+        # RUNNING / 列表未同步
+        return True, {"code": code if code in (804, 813) else 813,
+                      "msg": "running" if not r.get("pending") else "列表同步中",
+                      "data": {"taskId": tid, "taskStatus": "RUNNING",
+                               "taskCostTime": r.get("costTime")}}
+
+    # ---- App 详情 ----
+    if path == "/api/webapp/detail":
+        wid = b.get("webappId")
+        if not wid:
+            return False, None
+        d = SC.webapp_detail(wid)
+        if not d:
+            return True, {"code": 807, "msg": "详情获取失败", "data": None}
+        return True, {"code": 0, "msg": "success", "data": d}
+
+    return False, None
+
+
+def _make_post_shim(orig):
+    """包装 _post(path, body, timeout=...) -> 优先走 session 通道。"""
+    if getattr(orig, _SESSION_SHIM_MARK, False):
+        return orig
+
+    def _post(path, body=None, timeout=40, *a, **kw):
+        try:
+            handled, res = _session_translate(path, body)
+            if handled:
+                return res
+        except Exception:
+            pass      # 翻译层任何异常都不应影响原通道
+        return orig(path, body, timeout, *a, **kw)
+
+    setattr(_post, _SESSION_SHIM_MARK, True)
+    return _post
+
+
+def _make_request_shim(orig, style):
+    """包装 _request/_req。style:
+         'url_method' -> (url, method=, body=, headers=, timeout=)
+         'method_path'-> (method, path, body=, timeout=, raw_key=)
+    """
+    if getattr(orig, _SESSION_SHIM_MARK, False):
+        return orig
+
+    def _extract(body):
+        """从 body 里取 path 与参数。body 结构因模块而异，这里统一兼容。"""
+        return body or {}
+
+    if style == "method_path":
+        def _shim(method, path, body=None, timeout=60, *a, **kw):
+            if str(method).upper() == "POST":
+                try:
+                    handled, res = _session_translate(path, body)
+                    if handled:
+                        return res
+                except Exception:
+                    pass
+            return orig(method, path, body, timeout, *a, **kw)
+    else:
+        def _shim(url, method="GET", body=None, headers=None, timeout=120, *a, **kw):
+            if str(method).upper() == "POST" and isinstance(url, str):
+                # 从完整 URL 中取 path 段
+                p = url
+                for pre in ("https://www.runninghub.ai", "http://www.runninghub.ai"):
+                    if p.startswith(pre):
+                        p = p[len(pre):]
+                        break
+                try:
+                    handled, res = _session_translate(p, body)
+                    if handled:
+                        return res
+                except Exception:
+                    pass
+            return orig(url, method, body, headers, timeout, *a, **kw)
+
+    setattr(_shim, _SESSION_SHIM_MARK, True)
+    return _shim
+
+
+def _install_session_channel():
+    """给所有业务模块装 session 通道 shim。幂等，可重复调用。
+
+    返回 (已装模块数, 会话是否可用)。
+    """
+    try:
+        import rh_session_channel as SC
+        armed = SC.is_configured()
+    except Exception:
+        return 0, False
+
+    names = ("rh_zimage_app", "rh_zimage_api", "rh_krea2_app", "rh_krea2_nsfw",
+             "rh_h3_flf_api", "rh_h3_dual_app", "rh_workflow_api", "rh_wan22",
+             "rh_reactor", "rh_illustrious_api", "rh_moss_app",
+             "rh_zimage_v2", "rh_h3_lora", "rh_openai")
+    n = 0
+    for mname in names:
+        try:
+            m = importlib.import_module(mname)
+        except Exception:
+            continue
+        try:
+            if hasattr(m, "_post"):
+                m._post = _make_post_shim(m._post)
+                n += 1
+            if hasattr(m, "_request"):
+                m._request = _make_request_shim(m._request, "url_method")
+                n += 1
+            if hasattr(m, "_req"):
+                # rh_reactor 是 (method, path, ...)，其余是 (url, method, ...)
+                fn = m._req
+                style = "method_path" if mname == "rh_reactor" else "url_method"
+                m._req = _make_request_shim(fn, style)
+                n += 1
+        except Exception:
+            pass
+    return n, armed
+
 
 
 def _load_state():
@@ -553,6 +737,8 @@ def _recover_stale_tasks():
 REGISTRY = {
     "zimage_i2i": {
         "name": "Zimage 图生图/文生图 (I2I+T2I · App)",
+        "label": "Zimage",
+        "group": "image",
         "desc": "走已发布 App 通道。选图=图生图（换装/换风格，保留人物身份），不选图=文生图。主力方案",
         "module": "rh_zimage_app", "mode": "i2i",
         "params": [
@@ -574,6 +760,8 @@ REGISTRY = {
     },
     "krea2": {
         "name": "Krea2 图生图/文生图 (I2I+T2I · App)",
+        "label": "Krea2",
+        "group": "image",
         "desc": "走已发布 App 通道。选图=图生图（换装/换风格，保留人物身份），不选图=文生图。三个 LoRA 位可在运行时换名",
         "module": "rh_krea2_app", "mode": "i2i",
         "params": [
@@ -595,6 +783,9 @@ REGISTRY = {
     },
     "h3_flf_video": {
         "name": "MiniMaxH3 首尾帧视频 (I2V)",
+        "label": "H3 首尾帧",
+        "group": "video",
+        "hint": "首帧接尾帧，中间补运动",
         "desc": "首帧图(→尾帧图) → 视频。支持单段/续接，输出 mp4",
         "module": "rh_h3_flf_api", "mode": "video",
         "params": [
@@ -610,23 +801,27 @@ REGISTRY = {
         ],
     },
     "h3_omni_video": {
-        "name": "MiniMaxH3 全能视频 (T2V/参考)",
-        "desc": "全能力：文生视频 / 参考图/视频/音频 omni，输出 mp4",
-        "module": "rh_workflow_api", "mode": "video",
+        "name": "MiniMaxH3 双参考图视频 (Picture1+Picture2)",
+        "label": "H3 双参考",
+        "group": "video",
+        "hint": "两张参考图 → 带人声视频",
+        "desc": "两张人物参考图 + 提示词 → 带同期人声的视频。参考图1 对应 <Picture 1>，参考图2 对应 <Picture 2>。App: 2114838999247724546。加速 LoRA 内置强制开启，无需手动配置",
+        "module": "rh_h3_dual_app", "mode": "video",
         "params": [
-            {"k": "ref_image", "label": "参考图(可选)", "type": "ref", "accepts": "image", "def": ""},
-            {"k": "mode", "label": "模式", "type": "select", "options": [{"v": "", "label": "自动(有参考图→omni，无→文生视频)"}, {"v": "text_to_video", "label": "文生视频 T2V"}, {"v": "omni_reference", "label": "参考图驱动 omni"}], "def": ""},
-            {"k": "ratio", "label": "比例", "type": "select", "options": ["9:16 (Portrait Widescreen)", "16:9 (Widescreen)", "1:1 (Square)", "3:4 (Portrait Standard)", "4:3 (Standard)", "21:9 (Ultrawide)"], "def": "9:16 (Portrait Widescreen)"},
-            {"k": "megapixels", "label": "分辨率", "type": "select", "options": [{"v": "0.25", "label": "0.25 MP（低清快出）"}, {"v": "0.4", "label": "0.4 MP（标清）"}, {"v": "0.6", "label": "0.6 MP（推荐）"}, {"v": "0.9", "label": "0.9 MP（高清）"}, {"v": "1.2", "label": "1.2 MP（超清）"}], "def": "0.4"},
-            {"k": "duration", "label": "时长(秒)", "type": "float", "def": 5, "help": "视频长度，越长越贵"},
-            {"k": "steps", "label": "步数", "type": "int", "def": 8},
-            {"k": "lora", "label": "LoRA", "type": "select", "options": [{"v": "none", "label": "无"}, {"v": "synthpussy", "label": "synthpussy（阴部细节加强，实测✓）"}, {"v": "realface", "label": "realface（人物真实质感，触发词 r34l1sm）"}, {"v": "cinematic", "label": "cinematic（电影级质感，触发词 DY）"}, {"v": "physics", "label": "physics（物理运动，不稳定）"}, {"v": "nokia", "label": "nokia（诺基亚复古低清，触发词 nokiastyle）"}], "def": "none"},
-            {"k": "lora_strength", "label": "LoRA强度", "type": "float", "def": 0.9, "help": "仅 LoRA≠none 时生效", "group": "advanced"},
-            {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
+            {"k": "ref_a", "label": "参考图 1 (Picture 1)", "type": "ref", "accepts": "image", "def": "", "help": "第一张人物参考图，对应提示词 <Picture 1>"},
+            {"k": "ref_b", "label": "参考图 2 (Picture 2)", "type": "ref", "accepts": "image", "def": "", "help": "第二张人物参考图，对应提示词 <Picture 2>"},
+            {"k": "ratio", "label": "比例", "type": "select", "options": ["9:16 (Portrait Widescreen)", "16:9 (Widescreen)", "1:1 (Square)", "3:4 (Portrait Standard)", "4:3 (Standard)", "2:3 (Portrait Photo)", "3:2 (Photo)", "21:9 (Ultrawide)"], "def": "9:16 (Portrait Widescreen)"},
+            {"k": "megapixels", "label": "分辨率", "type": "select", "options": [{"v": "0.2", "label": "0.2 MP（低清快出）"}, {"v": "0.4", "label": "0.4 MP（标清 · 480×832）"}, {"v": "0.6", "label": "0.6 MP（推荐）"}, {"v": "1.0", "label": "1.0 MP（高清 · 慢）"}], "def": "0.4"},
+            {"k": "duration", "label": "时长(秒)", "type": "select", "options": [{"v": "5", "label": "5 秒（124 帧）"}, {"v": "10", "label": "10 秒（243 帧 · 推荐）"}, {"v": "15", "label": "15 秒（362 帧）"}], "def": "10", "help": "自动换算成帧数提交；只能选这三档对齐值"},
+            {"k": "steps", "label": "步数", "type": "int", "def": 8, "help": "配套加速 LoRA，建议 8"},
+            {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机（App 未暴露，仅记录）", "group": "advanced"},
         ],
     },
      "reactor_swap": {
         "name": "ReActor 只换脸（视频）",
+        "label": "ReActor 换脸",
+        "group": "video",
+        "hint": "只替换人脸，身体背景不动",
         "desc": "像素级换脸：只替换源视频里的人脸，身体/动作/服装/背景原样保留。输出自动贴合源视频分辨率。⚠️ 脸型差异过大会变形；要「连人带货一起换」请用 Wan Animate",
         "module": "rh_reactor", "mode": "video",
         "params": [
@@ -649,6 +844,9 @@ REGISTRY = {
     },
     "wan22_animate": {
          "name": "动作迁移 · Wan Animate 2.2",
+         "label": "Wan 动作迁移",
+         "group": "video",
+         "hint": "参考图定长相，源视频定动作",
          "desc": "生成式角色替换：参考图定身份（脸/发型/服装），源视频定动作。⚠️ 会连同服装/背景一起重画；要「只换脸」请用 ReActor",
          "module": "rh_wan22", "mode": "video",
          "params": [
@@ -670,8 +868,33 @@ REGISTRY = {
              {"k": "steps", "label": "步数", "type": "int", "def": 6, "help": "默认 6（工作流原值）", "group": "advanced"},
          ],
      },
+    "moss_t2i": {
+        "name": "MOSS 八步加速版 文生图 (T2I · App)",
+        "label": "MOSS",
+        "group": "image",
+        "desc": "走已发布 App 通道（moss八步加速版）。8 步约 33 秒 / 4 步约 12 秒。2 megapixels 锁定，9:16 出 1088×1920。无 LoRA 位、无参考图、无重绘强度",
+        "module": "rh_moss_app", "mode": "t2i",
+        "params": [
+            {"k": "resolution", "label": "比例", "type": "select", "options": [
+                {"v": "9:16 (Portrait Widescreen)", "label": "9:16 竖屏（1088×1920 · 推荐）"},
+                {"v": "16:9 (Widescreen)", "label": "16:9 横屏（1920×1088）"},
+                {"v": "3:4 (Portrait Standard)", "label": "3:4 竖屏（1200×1600）"},
+                {"v": "4:3 (Standard)", "label": "4:3 横屏（1600×1200）"},
+                {"v": "2:3 (Portrait Photo)", "label": "2:3 竖屏（1152×1728）"},
+                {"v": "3:2 (Photo)", "label": "3:2 横屏（1728×1152）"},
+                {"v": "1:1 (Square)", "label": "1:1 方形（1440×1440）"},
+                {"v": "21:9 (Ultrawide)", "label": "21:9 超宽（2112×896）"},
+            ], "def": "9:16 (Portrait Widescreen)",
+             "help": "megapixels 锁定 2.0，比例换算成实际宽高。9:16 与 16:9 是实测通过的档位"},
+            {"k": "steps", "label": "步数", "type": "int", "def": 8,
+             "help": "实测 9:16/2MP：4 步≈12s（快，手部/细节易崩）｜6 步≈23s｜8 步≈33s（默认，细节足）"},
+            {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "App 未暴露，仅记录", "group": "advanced"},
+        ],
+    },
      "illustrious_t2i": {
         "name": "Illustrious 二次元文生图 (T2I)",
+        "label": "Illustrious",
+        "group": "image",
         "desc": "WAI-illustrious-SDXL 二次元底模（自带动漫画风）。可选加 Smooth_Booster 画质增强 / Cunnystyle 插画微调。半写实 CG 动漫风",
         "module": "rh_illustrious_api", "mode": "t2i",
         "params": [
@@ -1025,27 +1248,29 @@ def _run_task(task_id, script_key, params):
                     TASKS[task_id].update({"status": "done", "image": videos[0] if videos else None,
                                            "files": videos, "pid": res.get("prompt_id"), "error": None})
             else:
-                ref_image = params.get("ref_image") or ""
-                ref_paths = None
-                if ref_image:
-                    rp = _resolve_ref_path(ref_image)
-                    if rp: ref_paths = [rp]
-                mode = params.get("mode") or None
+                # 双参考图 App 通道：ref_a(Picture 1) + ref_b(Picture 2)
+                # 加速 LoRA 已内置在工作流里强制开启，这里不传 lora 参数
+                ref_a = params.get("ref_a") or ""
+                ref_b = params.get("ref_b") or ""
+                pa = _resolve_ref_path(ref_a) if ref_a else None
+                pb = _resolve_ref_path(ref_b) if ref_b else None
+                if ref_a and not pa:
+                    raise RuntimeError(f"参考图1不存在: {ref_a}")
+                if ref_b and not pb:
+                    raise RuntimeError(f"参考图2不存在: {ref_b}")
                 res = mod.run(
                     prompt_text=prompt,
-                    ref_image_paths=ref_paths,
-                    aspect_ratio=params.get("ratio", "9:16 (Portrait Widescreen)"),
+                    ref_a=pa,
+                    ref_b=pb,
+                    ratio=params.get("ratio", "9:16 (Portrait Widescreen)"),
                     megapixels=float(params.get("megapixels", 0.4)),
-                    duration=float(params.get("duration", 5)),
+                    duration=params.get("duration", 10),
                     steps=int(params.get("steps", 8)),
-                    noise_seed=seed,
                     download_dir=str(OUT_DIR),
-                    mode=mode,
-                    lora=lora, lora_strength=lora_st,
                     on_submit=_on_submit,
                 )
                 saved = res.get("saved", []) or []
-                # omni 工作流输出可能混入中间节点 png，image 优先选 mp4
+                # 输出是 mp4（含音频），优先选视频
                 _img = next((f for f in saved if str(f).lower().endswith((".mp4", ".webm", ".mov"))), saved[0] if saved else None)
                 with _lock:
                     TASKS[task_id].update({"status": "done", "image": _img,
@@ -1152,6 +1377,28 @@ def _run_task(task_id, script_key, params):
                 TASKS[task_id].update({
                     "status": "done", "image": saved[0] if saved else None,
                     "files": saved, "pid": res.get("prompt_id"), "error": None,
+                })
+            _save_state()
+            return
+        if script_key == "moss_t2i":
+            # MOSS 八步加速版文生图（rh_moss_app，走 ai-app/run 通道）
+            # App 只暴露 3 个字段：4.text / 23.aspect_ratio / 16.steps
+            ratio = params.get("resolution") or "9:16 (Portrait Widescreen)"
+            with _lock:
+                TASKS[task_id]["status"] = "submitting"
+            res = mod.run(
+                prompt_text=prompt,
+                ratio=ratio,
+                steps=int(params.get("steps", 8)),
+                download_dir=str(OUT_DIR),
+                on_submit=_on_submit,
+                verbose=False,
+            )
+            saved = [os.path.basename(p) for p in (res.get("saved") or [])]
+            with _lock:
+                TASKS[task_id].update({
+                    "status": "done", "image": saved[0] if saved else None,
+                    "files": saved, "pid": str(res.get("task_id")), "error": None,
                 })
             _save_state()
             return
@@ -1667,6 +1914,17 @@ class Handler(BaseHTTPRequestHandler):
         self._send(403, {"error": "该接口仅限本机访问（WebUI 自用配置接口）"})
         return True
 
+    def _session_ok(self):
+        """是否已登录（会话存在且未过期）。未配置也视为未登录。"""
+        try:
+            import rh_session_channel as _SC
+            s = _SC.get_session()
+            if not s.get("token"):
+                return False
+            return not _SC.is_expired()
+        except Exception:
+            return False
+
     def do_GET(self):
         u = urlparse(self.path)
         path = u.path
@@ -1683,7 +1941,11 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             self._send(200, html, "text/html; charset=utf-8")
         elif path == "/api/scripts":
-            self._send(200, {k: {"name": v["name"], "desc": v["desc"], "mode": v["mode"], "params": v["params"]}
+            self._send(200, {k: {"name": v["name"],
+                                 "label": v.get("label") or v["name"],
+                                 "group": v.get("group") or ("video" if v.get("mode") == "video" else "image"),
+                                 "hint": v.get("hint") or "",
+                                 "desc": v["desc"], "mode": v["mode"], "params": v["params"]}
                              for k, v in REGISTRY.items()})
         elif path == "/api/refs":
             self._send(200, {"refs": _list_refs(), "outputs": _list_outputs()})
@@ -1736,6 +1998,14 @@ class Handler(BaseHTTPRequestHandler):
                     "model": "zimage",
                 },
             })
+        elif path == "/api/session":
+            try:
+                import rh_session_channel as _SC
+                st = _SC.status()
+            except Exception as e:
+                st = {"configured": False, "expired": False, "expire": 0,
+                      "userId": "", "name": "", "tokenHead": "", "error": str(e)}
+            self._send(200, st)
         elif path == "/api/openai_key":
             # 返回完整 key（本机接口，仅用于复制给第三方软件）
             oa_key = _load_config().get("openai_key") or ""
@@ -1833,6 +2103,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b"{}"
+
+        # ---- 未登录守卫：所有业务接口一律拒绝，只放行登录/会话/设置 ----
+        if path.startswith("/api/") and not self._session_ok():
+            allowed = {
+                "/api/login", "/api/logout", "/api/session",
+                "/api/session/refresh", "/api/settings", "/api/backend",
+                "/api/update_check", "/api/scripts", "/api/latest_image",
+            }
+            if path not in allowed:
+                self._send(401, {"ok": False, "error": "未登录，请先登录后再使用",
+                                 "need_login": True})
+                return
+
         if path == "/api/market/submit":
             if _has_active_task():
                 self._send(400, {"error": "已有任务在运行，请等待完成后再提交"})
@@ -1912,6 +2195,129 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(502, {"error": f"LLM 接口错误: {msg}"})
             except Exception as e:
                 self._send(500, {"error": f"润色失败: {e}"})
+        elif path == "/api/login":
+            try:
+                data = json.loads(raw.decode() or "{}")
+            except Exception:
+                self._send(400, {"ok": False, "error": "bad json"})
+                return
+            acct = (data.get("account") or "").strip()
+            pwd = data.get("password") or ""
+            if not acct or not pwd:
+                self._send(400, {"ok": False, "error": "账号和密码不能为空"})
+                return
+            try:
+                import rh_session_channel as _SC
+                r = _SC.login(acct, pwd)
+            except Exception as e:
+                self._send(500, {"ok": False, "error": str(e)})
+                return
+            if r.get("ok"):
+                try:
+                    _install_session_channel()
+                except Exception:
+                    pass
+                self._send(200, {"ok": True, "status": _SC.status()})
+            else:
+                self._send(200, {"ok": False, "error": r.get("error")})
+            return
+        elif path == "/api/session/import":
+            # 安卓端：浏览器登录后把 localStorage 三件套直接回传写入
+            try:
+                data = json.loads(raw.decode() or "{}")
+            except Exception:
+                self._send(400, {"ok": False, "error": "bad json"})
+                return
+            tok = (data.get("token") or "").strip()
+            if not tok:
+                self._send(400, {"ok": False, "error": "缺少 token"})
+                return
+            try:
+                import rh_session_channel as _SC
+                cfg = _SC.load_conf()
+                claims = _SC.parse_jwt(tok)
+                cfg["session"] = {
+                    "token": tok,
+                    "refresh": (data.get("refresh") or "").strip(),
+                    "identify": (data.get("identify") or "").strip(),
+                    "comfy": (data.get("comfy") or "").strip(),
+                    "comfyExpire": int(data.get("comfyExpire") or 0),
+                    "userId": str(claims.get("sub") or ""),
+                    "name": (data.get("name") or claims.get("username") or ""),
+                    "email": (data.get("email") or ""),
+                    "expire": int(data.get("expire") or 0),
+                    "importedAt": int(time.time()),
+                }
+                _SC.save_conf(cfg)
+                _SC._detail_cache.clear()
+                _install_session_channel()
+                self._send(200, {"ok": True, "status": _SC.status()})
+            except Exception as e:
+                self._send(500, {"ok": False, "error": str(e)})
+            return
+        elif path == "/api/logout":
+            try:
+                import rh_session_channel as _SC
+                _SC.logout()
+                self._send(200, {"ok": True})
+            except Exception as e:
+                self._send(500, {"ok": False, "error": str(e)})
+            return
+        elif path == "/api/session/refresh":
+            try:
+                import rh_session_channel as _SC
+                r = _SC.refresh_token()
+                self._send(200, r)
+            except Exception as e:
+                self._send(500, {"ok": False, "error": str(e)})
+            return
+
+        elif path == "/api/session":
+            try:
+                data = json.loads(raw.decode() or "{}")
+            except Exception:
+                self._send(400, {"ok": False, "error": "bad json"})
+                return
+            try:
+                import rh_session_channel as _SC
+            except Exception as e:
+                self._send(500, {"ok": False, "error": str(e)})
+                return
+            if data.get("clear"):
+                cfg = _SC.load_conf()
+                cfg.pop("session", None)
+                _SC.save_conf(cfg)
+                try:
+                    _SC._detail_cache.clear()
+                except Exception:
+                    pass
+                self._send(200, {"ok": True, "cleared": True})
+                return
+            tok = (data.get("token") or "").strip()
+            if tok.startswith("Bearer "):
+                tok = tok[7:].strip()
+            if not tok:
+                self._send(400, {"ok": False, "error": "token 不能为空"})
+                return
+            cfg = _SC.load_conf()
+            cfg["session"] = {
+                "token": tok,
+                "identify": (data.get("identify") or "").strip(),
+                "comfy": (data.get("comfy") or "").strip(),
+                "userId": (data.get("userId") or "").strip(),
+                "expire": int(data.get("expire") or 0),
+                "name": (data.get("name") or "").strip(),
+                "savedAt": int(time.time()),
+            }
+            _SC.save_conf(cfg)
+            # 配置变了：清详情缓存 + 重新挂通道，让新会话立刻生效
+            try:
+                _SC._detail_cache.clear()
+                _install_session_channel()
+            except Exception:
+                pass
+            self._send(200, {"ok": True, "status": _SC.status()})
+
         elif path == "/api/settings":
             try:
                 data = json.loads(raw.decode() or "{}")
@@ -2119,6 +2525,14 @@ if __name__ == "__main__":
     RUNNING_PORT = a.port
     print(f"洛宝跑图台: http://localhost:{a.port}")
     print(f"  refs: {REFS_DIR} | 输出: {OUT_DIR}")
+    # session 通道：配了会话就把 openapi 请求翻译成网页端调用（计入运行次数/收益）
+    _n_shim, _armed = _install_session_channel()
+    if _armed:
+        print(f"  通道: session（已接管 {_n_shim} 处请求，计入 App 运行次数）")
+    elif _get_api_key():
+        print("  通道: API Key（未配会话，本次调用不计入运行次数）")
+    else:
+        print("  通道: 未配置（需要 API Key 或网页版会话）")
     _load_state()  # BASE 已确定，恢复历史任务
     _recover_stale_tasks()  # 自动复核上次进程遗留的『假活』任务
     ThreadingHTTPServer(("0.0.0.0", a.port), Handler).serve_forever()

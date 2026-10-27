@@ -1,3 +1,58 @@
+## [0.5.9] - 2026-10-28
+### 头条
+- **接入网页会话通道**：可直接用 RunningHub 账号登录，走 App creator 通道提交任务，调用**计入应用运行次数与作者收益**（API Key 通道不计）。
+### 新增
+- **`scripts/rh_session_channel.py`**（约 590 行）：session 通道完整封装。
+  - `login` / `refresh_token` / `_sign_comfy_auth` / `ensure_fresh` / `logout` / `parse_jwt`
+  - openapi → session 翻译层：`create_task` / `query_outputs` / `upload_image`
+  - 自动续期：每次请求前检查，token 距过期 < 2 分钟自动 refresh；comfy 凭证缺失或将过期自动重签
+- **登录入口（强制门禁）**：未登录时全屏遮罩拦截（`z-index 900/901`），脚本列表根本不加载。登录框含账号/密码、注册链接 `https://www.runninghub.ai/Login/EmailRegisterV3`。
+- **安卓浏览器自动登录**：App 内弹 WebView 打开 RunningHub 登录页，登录后自动提取 `localStorage` 三件套回灌。新增 `/api/session/import` 接口 + Kotlin `Bridge` 类（`window.AndroidBridge.startBrowserLogin`）。
+- **后端未登录守卫**：业务接口一律返回 `401 {"need_login": true}`，白名单：`login/logout/session/session\_refresh/session\_import/settings/backend/update\_check/scripts/latest\_image`。
+- **统一弹窗 `uiConfirm` / `uiAlert`**：替代原生 `confirm` / `alert`，样式对齐设置弹窗。
+### 变更
+- **`scripts/rh_webui.py`**：新增 `_install_session_channel()`，不改 11 个业务模块，只替换底层 `_post` / `_request` / `_req`，把 openapi 请求翻译成 session 请求（幂等）。
+- 新增路由：`/api/login`、`/api/logout`、`/api/session/refresh`、`/api/session`（GET/POST）、`/api/session/import`。
+- 退出登录后立即弹门禁，不再需要刷新页面。
+- 密码框默认明文（`type="text"`），提供 🙈 遮挡开关。
+- 删除「高级：手动粘贴令牌」前端入口。
+### 修复
+- `/api/output/taskHistory` 查询：服务端**忽略 taskId 参数**，改为拉列表后本地过滤。
+- `workflows/session.json` 加入 `.gitignore`（含真实 token，不得入库）。
+
+## [0.5.6] - 2026-10-27
+### 头条
+- **H3 双参考图视频上线**：`h3_omni_video` 从「9 图全能版」切换为「双参考图版」，走已发布 App 通道（`2114838999247724546`），不再走 `/proxy` 自己拼 prompt。
+  - 输入 2 张参考图：`ref_image_0` → Picture 1、`ref_image_1` → Picture 2，节点结构由 App 端锁定
+  - 时长参数以**帧数**暴露（`[192] PrimitiveInt.value`），换算：124=5 秒 / 243=10 秒 / 362=15 秒（24fps，17n+5 对齐）
+  - 视频带人声，音频链路经 `VAELoader(minimax_h3_audio_vae_fp32)` → `MiniMaxH3AVDecodeT8` → `VHS_VideoCombine`
+
+### 新增
+- **`scripts/rh_h3_dual_app.py`**：App 通道调用模块（约 530 行）。
+  - `SECONDS_TO_FRAMES` 换算表：前端填秒、模块内部换算成帧，解决 App 端只暴露帧数的问题
+  - 参考图传本地路径时自动走 `/proxy/{key}/upload/image` 上传
+  - 字段白名单从 `/api/webapp/detail` 动态拉取，不硬编码
+- **`scripts/rh_moss_app.py`**：安卓端此前缺失，本轮补齐。
+
+### 变更
+- **`rh_wan22.py` 网页端与安卓端统一**：此前两端实现分叉（网页端走 App 通道、安卓端走平台托管 `getJsonApiFormat`），现以网页端为准整体覆盖。注意网页端 `run()` 不接受 `width/height/compare/seed/steps`，调用点已同步调整为不传这些参数。
+- **`rh_webui.py` 两端对齐**：网页端多参考图逻辑（`ref_image_1`~`ref_image_9`）随 `h3_omni_video` 语义变更一并清理。
+
+### 移除
+- **`h3_omni_video` 的 LoRA 开关**：LoRA 已内置并强制开启，运行时 LoRA 选择与强度两个参数从 `h3_omni_video` 面板移除。
+  - `h3_flf_video` 的 `lora` / `lora_strength` 参数**仍然保留**：它走 `rh_h3_flf_api`，是另一条工作流，LoRA 由 `apply_lora()` 在运行时注入而非内置。要一并移除需先确认那条工作流是否内置 LoRA。
+
+### 技术
+- 三份 `webui.html`、两份 `rh_webui.py`、`rh_h3_dual_app.py`、`rh_moss_app.py`、`rh_wan22.py` 已全部 `cmp` 校验一致（无差异输出）。
+- 所有 Python 文件通过 `ast.parse` 语法校验；`REGISTRY` 求值验证两端 key 完全相同（8 项，含 `moss_t2i`）。
+- `versionCode` 20 → 21。
+
+### 未验证
+- **未编译 APK**，本轮仅改动源码与 assets。
+- **未端到端实跑**：web 版与安卓版均未实际提交过任务。
+- 成片效果（东北话/台湾腔还原、胸像构图是否守住）未下载检查。
+- 历史遗留：`rh_workflow_api.py` 已无入口引用，成为孤儿模块，暂保留未清理。
+
 ## [0.5.5] - 2026-10-22
 ### 变更
 - **Krea2 合并为单入口**：`krea2_t2i` / `krea2_i2i` 两项合并为 `krea2` 一项，与 `zimage_i2i` 结构对齐——**选图 = 图生图，不选图 = 文生图**。

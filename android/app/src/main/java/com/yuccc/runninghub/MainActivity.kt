@@ -77,6 +77,8 @@ class MainActivity : AppCompatActivity() {
         ws.allowFileAccess = true
         ws.mediaPlaybackRequiresUserGesture = false
         ws.cacheMode = WebSettings.LOAD_NO_CACHE
+        // 暴露原生桥，供前端调用「浏览器登录」
+        webView.addJavascriptInterface(Bridge(), "AndroidBridge")
         webView.webViewClient = WebViewClient()
         // 关键：让 <input type="file"> 能弹出系统文件选择器（上传参考图用）
         webView.webChromeClient = object : WebChromeClient() {
@@ -199,6 +201,86 @@ class MainActivity : AppCompatActivity() {
                     null  // 用户取消 → 通知 WebView
                 }
             )
+        }
+    }
+
+    /** JS 桥：前端 window.AndroidBridge.* */
+    inner class Bridge {
+        @android.webkit.JavascriptInterface
+        fun startBrowserLogin() {
+            handler.post { openLoginWebView() }
+        }
+    }
+
+    private var loginWebView: WebView? = null
+
+    /**
+     * 用独立的 WebView 打开 RunningHub 登录页。
+     * 用户在里面正常登录，成功后从 localStorage 取三件套回灌给主 WebView。
+     */
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun openLoginWebView() {
+        if (loginWebView != null) return
+        val lv = WebView(this)
+        lv.settings.javaScriptEnabled = true
+        lv.settings.domStorageEnabled = true
+        lv.settings.databaseEnabled = true
+        lv.settings.cacheMode = WebSettings.LOAD_DEFAULT
+        lv.settings.userAgentString = lv.settings.userAgentString + " RunningHubShell/1.0"
+        val dlg = android.app.AlertDialog.Builder(this)
+            .setTitle("登录 RunningHub")
+            .setView(lv)
+            .setNegativeButton("取消") { _, _ -> cleanupLoginWebView() }
+            .setPositiveButton("我已登录，导入", null)
+            .create()
+        dlg.setOnShowListener {
+            dlg.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                extractAndImport(lv, dlg)
+            }
+        }
+        dlg.setOnDismissListener { cleanupLoginWebView() }
+        loginWebView = lv
+        lv.loadUrl("https://www.runninghub.ai/Login/login")
+        dlg.show()
+    }
+
+    private fun cleanupLoginWebView() {
+        try { loginWebView?.destroy() } catch (e: Throwable) {}
+        loginWebView = null
+    }
+
+    /** 从登录 WebView 的 localStorage 提取三件套，交给前端导入 */
+    private fun extractAndImport(lv: WebView, dlg: android.app.AlertDialog) {
+        val js = """(function(){try{return JSON.stringify({
+            token: localStorage.getItem('Rh-Accesstoken')||'',
+            refresh: localStorage.getItem('Rh-Refreshtoken')||'',
+            identify: localStorage.getItem('Rh-Identify')||'',
+            comfy: localStorage.getItem('Rh-Comfy-Auth')||'',
+            comfyExpire: Number(localStorage.getItem('Rh-Comfy-Expire-In')||0),
+            expire: Number(localStorage.getItem('Rh-Expire-In')||0)
+        });}catch(e){return JSON.stringify({error:e.message});}})()"""
+        lv.evaluateJavascript(js) { ret ->
+            val json = try {
+                org.json.JSONTokener(ret).nextValue() as? String ?: ret
+            } catch (e: Throwable) { ret }
+            if (json.isNullOrBlank() || !json.contains("token")) {
+                handler.post {
+                    android.widget.Toast.makeText(this, "未取到登录信息，请先在页面内完成登录", android.widget.Toast.LENGTH_LONG).show()
+                }
+                return@evaluateJavascript
+            }
+            if (json.contains("\"error\"")) {
+                handler.post {
+                    android.widget.Toast.makeText(this, "读取失败: " + json, android.widget.Toast.LENGTH_LONG).show()
+                }
+                return@evaluateJavascript
+            }
+            handler.post {
+                dlg.dismiss()
+                // 回调前端导入
+                val escaped = org.json.JSONObject.quote(json)
+                webView.evaluateJavascript("onBrowserLoginResult($escaped)", null)
+            }
         }
     }
 
