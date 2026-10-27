@@ -334,7 +334,7 @@ def _restart_backend():
 # 更新检测（v0.5.1）：GitHub 最新 Release vs 当前版本
 # 免 API 方案：latest 重定向 → 解析 tag，绕开 GitHub API 限流(60次/h)
 # ============================================================
-CUR_VERSION = "0.5.12"          # 当前版本号（build.gradle versionName）
+CUR_VERSION = "0.5.13"          # 当前版本号（build.gradle versionName）
 _UPDATE_CACHE = {"ts": 0, "data": None}   # 15 分钟缓存，避免频繁打外网
 
 def _version_tuple(v):
@@ -1809,6 +1809,53 @@ def _has_active_task():
     return False
 
 
+def _do_session_import(data):
+    """把会话字段写入 session.json。返回 (ok, msg)。
+
+    data 需含 token；其余字段（refresh/identify/comfy/expire/name/email）可选。
+    """
+    tok = (data.get("token") or "").strip()
+    if not tok:
+        return False, "缺少 token"
+    try:
+        import rh_session_channel as _SC
+        cfg = _SC.load_conf()
+        claims = _SC.parse_jwt(tok)
+        cfg["session"] = {
+            "token": tok,
+            "refresh": (data.get("refresh") or "").strip(),
+            "identify": (data.get("identify") or "").strip(),
+            "comfy": (data.get("comfy") or "").strip(),
+            "comfyExpire": int(data.get("comfyExpire") or 0),
+            "userId": str(claims.get("sub") or ""),
+            "name": (data.get("name") or claims.get("username") or ""),
+            "email": (data.get("email") or ""),
+            "expire": int(data.get("expire") or 0),
+            "importedAt": int(time.time()),
+        }
+        _SC.save_conf(cfg)
+        _SC._detail_cache.clear()
+        _install_session_channel()
+        # 上传凭证缺失则立刻重签（浏览器侧可能没写入 Rh-Comfy-Auth）
+        if not (cfg["session"].get("comfy") or "").strip():
+            try:
+                _SC._sign_comfy_auth(quiet=True)
+            except Exception:
+                pass
+        return True, "ok"
+    except Exception as e:
+        return False, str(e)
+
+
+def _do_session_status():
+    """返回会话状态，失败时返回空 dict。"""
+    try:
+        import rh_session_channel as _SC
+        return _SC.status()
+    except Exception:
+        return {}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         # 轻量请求日志：只打 /v1/* 和非静态接口，避免刷屏
@@ -2109,6 +2156,7 @@ class Handler(BaseHTTPRequestHandler):
             allowed = {
                 "/api/login", "/api/logout", "/api/session",
                 "/api/session/refresh", "/api/session/import",
+                "/api/session/capture",
                 "/api/settings", "/api/backend",
                 "/api/update_check", "/api/scripts", "/api/latest_image",
             }
@@ -2222,6 +2270,23 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(200, {"ok": False, "error": r.get("error")})
             return
+        elif path == "/api/session/capture":
+            # 网页版一键登录：后端直接读本机浏览器的 localStorage（leveldb）
+            try:
+                import rh_browser_capture as _BC
+                r = _BC.capture(verbose=False)
+            except Exception as e:
+                self._send(500, {"ok": False, "error": "读取浏览器数据失败: %s" % e})
+                return
+            if not r.get("ok"):
+                self._send(200, {"ok": False, "error": r.get("error") or "未找到登录状态"})
+                return
+            ok, msg = _do_session_import(r)
+            if not ok:
+                self._send(200, {"ok": False, "error": msg})
+                return
+            self._send(200, {"ok": True, "status": _do_session_status()})
+            return
         elif path == "/api/session/import":
             # 安卓端：浏览器登录后把 localStorage 三件套直接回传写入
             try:
@@ -2229,38 +2294,11 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self._send(400, {"ok": False, "error": "bad json"})
                 return
-            tok = (data.get("token") or "").strip()
-            if not tok:
-                self._send(400, {"ok": False, "error": "缺少 token"})
+            ok, msg = _do_session_import(data)
+            if not ok:
+                self._send(400, {"ok": False, "error": msg})
                 return
-            try:
-                import rh_session_channel as _SC
-                cfg = _SC.load_conf()
-                claims = _SC.parse_jwt(tok)
-                cfg["session"] = {
-                    "token": tok,
-                    "refresh": (data.get("refresh") or "").strip(),
-                    "identify": (data.get("identify") or "").strip(),
-                    "comfy": (data.get("comfy") or "").strip(),
-                    "comfyExpire": int(data.get("comfyExpire") or 0),
-                    "userId": str(claims.get("sub") or ""),
-                    "name": (data.get("name") or claims.get("username") or ""),
-                    "email": (data.get("email") or ""),
-                    "expire": int(data.get("expire") or 0),
-                    "importedAt": int(time.time()),
-                }
-                _SC.save_conf(cfg)
-                _SC._detail_cache.clear()
-                _install_session_channel()
-                # 上传凭证缺失则立刻重签（浏览器侧可能没写入 Rh-Comfy-Auth）
-                if not (cfg["session"].get("comfy") or "").strip():
-                    try:
-                        _SC._sign_comfy_auth(quiet=True)
-                    except Exception:
-                        pass
-                self._send(200, {"ok": True, "status": _SC.status()})
-            except Exception as e:
-                self._send(500, {"ok": False, "error": str(e)})
+            self._send(200, {"ok": True, "status": _do_session_status()})
             return
         elif path == "/api/logout":
             try:

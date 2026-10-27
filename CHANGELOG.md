@@ -1,18 +1,18 @@
-## [0.5.12] - 2026-10-28
-
+## [0.5.13] - 2026-10-28
+### 变更
+- **登录改为「一键登录」**：门禁页只留一个按钮，自动获取登录态，不再需要手动复制粘贴。
+  - 网页版：后端直接读本机浏览器的 localStorage（leveldb），读到就写入会话。
+  - 安卓版：App 内嵌 WebView 打开官网，登录后自动抓取并导入。
+- 账号密码登录降为次要入口（默认折叠），官网 Google 注册的账号没有密码时走一键登录。
 ### 修复
-- **安卓自动抓取失效**：官网是 Next.js SPA，登录成功只做客户端路由跳转，`onPageFinished` 不再触发，导致抓取只跑一次就失效。改为弹窗存活期每 800ms 轮询 localStorage，拿到 token 立即导入并关窗。
-- **Google OAuth 被拒**：去掉 WebView 的 `; wv` 与 `Version/4.0` UA 标记，避免 Google 登录页报 `disallowed_useragent`。
-- **轮询 Runnable 自引用**：`handler.postDelayed(this, ...)` 中的 `this` 在 lambda 内指向 Activity，改为显式可空 `Runnable?` 引用。
-
+- **一键登录解析报错**：`o.Rh-Accesstoken` 中键名带连字符，被 JS 解析为减法表达式并抛 ReferenceError，被 catch 静默吞掉，导致整段 localStorage JSON 导入永远失败。改用 `o['Rh-Accesstoken']` 取值。
+- 安卓自动抓取失效：官网是 SPA，登录后不重载页面，`onPageFinished` 只触发一次。改为弹窗存活期每 800ms 轮询 localStorage。
+- Google OAuth 被拒：去掉 WebView UA 里的 `; wv` 与 `Version/4.0` 标记。
 ### 新增
-- **浏览器端会话导入**：同源策略禁止跨域读取官网 localStorage，浏览器环境改为两种通道：
-  - 粘贴框：支持纯 token、整段 localStorage JSON、`{"token":...}`
-  - `#rhimport=<token>` 哈希通道，便于外部脚本/bookmarklet 跳转导入
-- 粘贴框仅在浏览器环境显示，App 内仍为全自动。
-
+- `scripts/rh_browser_capture.py`：只读解析 Chrome/Chromium/Edge/Brave/Vivaldi 的 localStorage leveldb，提取 RunningHub 会话。
+- `POST /api/session/capture`：网页版一键登录的后端接口。
 ### 版本
-- versionCode 24 -> 25，versionName 0.5.11 -> 0.5.12
+- versionCode 25 -> 26，versionName 0.5.12 -> 0.5.13
 
 ## [0.5.11] - 2026-10-28
 ### 变更
