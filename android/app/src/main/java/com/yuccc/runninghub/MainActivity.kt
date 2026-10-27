@@ -213,6 +213,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var loginWebView: WebView? = null
+    private var polling = false
 
     /**
      * 用独立的 WebView 打开 RunningHub 官网。
@@ -226,7 +227,10 @@ class MainActivity : AppCompatActivity() {
         lv.settings.domStorageEnabled = true
         lv.settings.databaseEnabled = true
         lv.settings.cacheMode = WebSettings.LOAD_DEFAULT
-        lv.settings.userAgentString = lv.settings.userAgentString + " RunningHubShell/1.0"
+        // 去掉 WebView 标识：Google OAuth 会拒绝 wv 内核 UA（disallowed_useragent）
+        lv.settings.userAgentString = lv.settings.userAgentString
+            .replace("; wv", "")
+            .replace(" Version/4.0", "")
 
         val dlg = android.app.AlertDialog.Builder(this)
             .setTitle("登录 RunningHub")
@@ -234,13 +238,17 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("取消") { _, _ -> cleanupLoginWebView() }
             .create()
 
-        // 页面每次加载完成后自动检测一次：登录成功就自动导入，不用手动点按钮
+        // 官网是 SPA，登录成功不会重载页面，onPageFinished 不会再触发。
+        // 所以用轮询：弹窗存活期间每 800ms 探一次 localStorage。
         lv.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView?, url: String?): Boolean = false
-
             override fun onPageFinished(v: WebView?, url: String?) {
                 super.onPageFinished(v, url)
-                tryAutoImport(lv, dlg)
+                // 页面加载完再启动轮询，避免在上一个页面的空轮询里打转
+                if (!polling) {
+                    polling = true
+                    startPoll(lv, dlg)
+                }
             }
         }
         lv.webChromeClient = WebChromeClient()
@@ -252,8 +260,8 @@ class MainActivity : AppCompatActivity() {
         dlg.show()
     }
 
-    /** 页面加载完成后自动探测：拿到 token 就导入并关窗，拿不到就静默等待 */
-    private fun tryAutoImport(lv: WebView, dlg: android.app.AlertDialog) {
+    /** 弹窗存活期间轮询检测，拿到 token 立即导入并关窗 */
+    private fun startPoll(lv: WebView, dlg: android.app.AlertDialog) {
         val js = """(function(){try{
             return JSON.stringify({
                 url: location.href,
@@ -265,22 +273,34 @@ class MainActivity : AppCompatActivity() {
                 expire: Number(localStorage.getItem('Rh-Expire-In')||0)
             });
         }catch(e){return JSON.stringify({url:'', token:''});}})()"""
-        lv.evaluateJavascript(js) { ret ->
-            val raw = try {
-                org.json.JSONTokener(ret).nextValue() as? String ?: ret
-            } catch (e: Throwable) { ret }
-            val obj = try { org.json.JSONObject(raw) } catch (e: Throwable) { null } ?: return@evaluateJavascript
-            val tok = obj.optString("token", "")
-            if (tok.isBlank()) return@evaluateJavascript   // 还没登录，继续等
-            handler.post {
-                dlg.dismiss()
-                webView.evaluateJavascript(
-                    "onBrowserLoginResult(" + org.json.JSONObject.quote(raw) + ")", null)
+
+        var tick: Runnable? = null
+        tick = object : Runnable {
+            override fun run() {
+                if (loginWebView == null) return          // 弹窗已关，停止
+                lv.evaluateJavascript(js) { ret ->
+                    val raw = try {
+                        org.json.JSONTokener(ret).nextValue() as? String ?: ret
+                    } catch (e: Throwable) { ret }
+                    val obj = try { org.json.JSONObject(raw) } catch (e: Throwable) { null }
+                    val tok = obj?.optString("token", "") ?: ""
+                    if (tok.isNotBlank()) {
+                        handler.post {
+                            dlg.dismiss()
+                            webView.evaluateJavascript(
+                                "onBrowserLoginResult(" + org.json.JSONObject.quote(raw) + ")", null)
+                        }
+                    } else {
+                        handler.postDelayed(tick!!, 800)  // 还没登录，继续等
+                    }
+                }
             }
         }
+        handler.postDelayed(tick!!, 800)
     }
 
     private fun cleanupLoginWebView() {
+        polling = false
         try { loginWebView?.destroy() } catch (e: Throwable) {}
         loginWebView = null
     }

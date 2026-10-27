@@ -1,3 +1,19 @@
+## [0.5.12] - 2026-10-28
+
+### 修复
+- **安卓自动抓取失效**：官网是 Next.js SPA，登录成功只做客户端路由跳转，`onPageFinished` 不再触发，导致抓取只跑一次就失效。改为弹窗存活期每 800ms 轮询 localStorage，拿到 token 立即导入并关窗。
+- **Google OAuth 被拒**：去掉 WebView 的 `; wv` 与 `Version/4.0` UA 标记，避免 Google 登录页报 `disallowed_useragent`。
+- **轮询 Runnable 自引用**：`handler.postDelayed(this, ...)` 中的 `this` 在 lambda 内指向 Activity，改为显式可空 `Runnable?` 引用。
+
+### 新增
+- **浏览器端会话导入**：同源策略禁止跨域读取官网 localStorage，浏览器环境改为两种通道：
+  - 粘贴框：支持纯 token、整段 localStorage JSON、`{"token":...}`
+  - `#rhimport=<token>` 哈希通道，便于外部脚本/bookmarklet 跳转导入
+- 粘贴框仅在浏览器环境显示，App 内仍为全自动。
+
+### 版本
+- versionCode 24 -> 25，versionName 0.5.11 -> 0.5.12
+
 ## [0.5.11] - 2026-10-28
 ### 变更
 - **登录页简化**：去掉「🌐 在浏览器中登录（自动导入）」按钮，改为一个「打开官网登录 / 注册 →」链接。

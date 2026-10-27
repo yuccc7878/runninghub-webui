@@ -2,9 +2,9 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<meta name="version" content="v0.5.11">
+<meta name="version" content="v0.5.12">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>洛宝跑图台 v0.5.11 · RunningHub WebUI</title>
+<title>洛宝跑图台 v0.5.12 · RunningHub WebUI</title>
 <style>
 :root{
   --bg:#0f1115;--card:#171a21;--line:#262b36;--tx:#e6e9ef;--dim:#8b93a7;--acc:#e0a03c;--ok:#4caf7d;--err:#e0564c;
@@ -234,7 +234,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 </style>
 </head>
 <body>
-<h1>洛宝<span>跑图台</span> <span class="ver">v0.5.11</span></h1>
+<h1>洛宝<span>跑图台</span> <span class="ver">v0.5.12</span></h1>
 <div class="sub">RunningHub 本地统一出图 · Zimage / Krea2 · 任务异步 · 出图直显 <span id="verInfo" style="margin-left:8px;color:var(--acc)"></span>
   <button onclick="reconnectBackend()" style="margin-left:10px;background:#1f2530;border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:700">🔌 连接后端</button>
 </div>
@@ -269,8 +269,20 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
     <div id="gateHint" style="font-size:11px;color:var(--dim);margin-top:10px;line-height:1.6">
       在打开的官网页面里完成登录，返回这里点上面的「登录」即可。
     </div>
-  </div>
-</div>
+    <div id="gateImpBox" style="display:none;margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+      <a href="#" onclick="gateToggleImport();return false"
+         style="color:var(--acc);font-size:11px;text-decoration:none">▸ 已登录官网？粘贴会话导入</a>
+      <div id="gateImpBody" style="display:none;margin-top:8px">
+        <textarea id="gateImpText" placeholder="粘贴 Rh-Accesstoken（或整段 localStorage JSON）"
+          style="width:100%;height:64px;font-size:11px;font-family:monospace;box-sizing:border-box"></textarea>
+        <button class="btn" style="width:100%;margin-top:6px" onclick="gateImportPaste()">导入</button>
+        <div style="font-size:10px;color:var(--dim);margin-top:6px;line-height:1.6">
+          官网按 F12 → Application → Local Storage → https://www.runninghub.ai → 复制 <code>Rh-Accesstoken</code> 的值。
+         </div>
+       </div>
+     </div>
+   </div>
+ </div>
 <!-- 统一确认/提示弹窗 -->
 <div id="dlgMask"></div>
 <div id="dlgBox">
@@ -1607,7 +1619,10 @@ function gateShow(formReady){
         off.setAttribute('href', 'https://www.runninghub.ai');
         off.onclick = null;
         const h = $('gateHint');
-        if(h) h.textContent = '在浏览器中完成登录后，回到这里用账号密码登录。';
+        if(h) h.textContent = '在浏览器中完成登录后，把会话导入这里。';
+        // 浏览器环境：跨域读不到官网 localStorage，只能手动粘贴
+        const ib = $('gateImpBox');
+        if(ib) ib.style.display = 'block';
       }
     }
     setTimeout(()=>{ try{ $('gateAcct').focus(); }catch(e){} }, 100);
@@ -1617,6 +1632,77 @@ function gateShow(formReady){
 function gateHide(){
   $('gateMask').style.display = 'none';
   $('gateBox').style.display = 'none';
+}
+// ===== 会话导入（浏览器环境用；App 内自动抓取不走这里）=====
+function gateToggleImport(){
+  const b = $('gateImpBody');
+  if(!b) return;
+  b.style.display = b.style.display === 'none' ? 'block' : 'none';
+  if(b.style.display === 'block'){ try{ $('gateImpText').focus(); }catch(e){} }
+}
+/** 从粘贴内容里解析出会话字段。支持纯 token / 整段 localStorage JSON / {"token":...} */
+function _parseImportText(txt){
+  const s = String(txt||'').trim();
+  if(!s) return null;
+  // 1) 本身是 JSON
+  if(s[0] === '{'){
+    try{
+      const o = JSON.parse(s);
+      if(o.token || o.accessToken || o.Rh-Accesstoken || o['Rh-Accesstoken']){
+        return {
+          token: o.token || o.accessToken || o['Rh-Accesstoken'],
+          refresh: o.refresh || o['Rh-Refreshtoken'] || '',
+          identify: o.identify || o['Rh-Identify'] || '',
+          comfy: o.comfy || o['Rh-Comfy-Auth'] || '',
+          comfyExpire: o.comfyExpire || Number(o['Rh-Comfy-Expire-In'] || 0) || 0,
+          expire: o.expire || Number(o['Rh-Expire-In'] || 0) || 0
+        };
+      }
+    }catch(e){}
+  }
+  // 2) 从文本里抠 JWT（三段 base64url，以 eyJ 开头）
+  const m = s.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+  if(m) return { token: m[0] };
+  return null;
+}
+async function gateImportPaste(){
+  const err = $('gateErr');
+  const o = _parseImportText($('gateImpText').value);
+  if(!o || !o.token){
+    err.style.color = 'var(--err)';
+    err.textContent = '没识别出 token，请确认复制的是 Rh-Accesstoken 的完整值';
+    return;
+  }
+  err.style.color = 'var(--dim)';
+  err.textContent = '正在导入…';
+  try{
+    const r = await api('/api/session/import', {method:'POST', body:JSON.stringify(o)});
+    if(r.ok){
+      $('gateImpText').value = '';
+      gateHide();
+      bootAfterLogin();
+    }else{
+      err.style.color = 'var(--err)';
+      err.textContent = '导入失败: ' + (r.error || '未知');
+    }
+  }catch(e){
+    err.style.color = 'var(--err)';
+    err.textContent = '导入请求失败: ' + e.message;
+  }
+}
+/** 页面地址带 #rhimport=<token> 时自动导入（方便从外部脚本/bookmarklet 跳转） */
+async function tryHashImport(){
+  const h = location.hash || '';
+  if(h.indexOf('#rhimport=') !== 0) return false;
+  const raw = decodeURIComponent(h.slice('#rhimport='.length));
+  if(!raw) return false;
+  const o = _parseImportText(raw);
+  history.replaceState(null, '', location.pathname + location.search);
+  if(!o || !o.token) return false;
+  try{
+    const r = await api('/api/session/import', {method:'POST', body:JSON.stringify(o)});
+    return !!r.ok;
+  }catch(e){ return false; }
 }
 
 async function gateCheck(){
@@ -1702,6 +1788,13 @@ function onBrowserLoginResult(payload){
 
 // 页面入口：先过门禁，通过后才跑正常初始化
 async function bootApp(){
+  // 地址带 #rhimport=<token> 时先走导入，成功就直接进主页
+  try{
+    if(await tryHashImport()){
+      if(typeof bootAfterLogin === 'function') bootAfterLogin();
+      return;
+    }
+  }catch(e){}
   const ok = await gateCheck();
   if(ok && typeof bootAfterLogin === 'function') bootAfterLogin();
 }
