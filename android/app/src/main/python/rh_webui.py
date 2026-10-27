@@ -334,7 +334,7 @@ def _restart_backend():
 # 更新检测（v0.5.1）：GitHub 最新 Release vs 当前版本
 # 免 API 方案：latest 重定向 → 解析 tag，绕开 GitHub API 限流(60次/h)
 # ============================================================
-CUR_VERSION = "0.5.9"          # 当前版本号（build.gradle versionName）
+CUR_VERSION = "0.5.10"          # 当前版本号（build.gradle versionName）
 _UPDATE_CACHE = {"ts": 0, "data": None}   # 15 分钟缓存，避免频繁打外网
 
 def _version_tuple(v):
@@ -2108,7 +2108,8 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/") and not self._session_ok():
             allowed = {
                 "/api/login", "/api/logout", "/api/session",
-                "/api/session/refresh", "/api/settings", "/api/backend",
+                "/api/session/refresh", "/api/session/import",
+                "/api/settings", "/api/backend",
                 "/api/update_check", "/api/scripts", "/api/latest_image",
             }
             if path not in allowed:
@@ -2251,6 +2252,12 @@ class Handler(BaseHTTPRequestHandler):
                 _SC.save_conf(cfg)
                 _SC._detail_cache.clear()
                 _install_session_channel()
+                # 上传凭证缺失则立刻重签（浏览器侧可能没写入 Rh-Comfy-Auth）
+                if not (cfg["session"].get("comfy") or "").strip():
+                    try:
+                        _SC._sign_comfy_auth(quiet=True)
+                    except Exception:
+                        pass
                 self._send(200, {"ok": True, "status": _SC.status()})
             except Exception as e:
                 self._send(500, {"ok": False, "error": str(e)})

@@ -2,9 +2,9 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<meta name="version" content="v0.5.9">
+<meta name="version" content="v0.5.10">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>洛宝跑图台 v0.5.9 · RunningHub WebUI</title>
+<title>洛宝跑图台 v0.5.10 · RunningHub WebUI</title>
 <style>
 :root{
   --bg:#0f1115;--card:#171a21;--line:#262b36;--tx:#e6e9ef;--dim:#8b93a7;--acc:#e0a03c;--ok:#4caf7d;--err:#e0564c;
@@ -236,7 +236,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 </style>
 </head>
 <body>
-<h1>洛宝<span>跑图台</span> <span class="ver">v0.5.9</span></h1>
+<h1>洛宝<span>跑图台</span> <span class="ver">v0.5.10</span></h1>
 <div class="sub">RunningHub 本地统一出图 · Zimage / Krea2 · 任务异步 · 出图直显 <span id="verInfo" style="margin-left:8px;color:var(--acc)"></span>
   <button onclick="reconnectBackend()" style="margin-left:10px;background:#1f2530;border:1px solid var(--line);color:var(--tx);border-radius:8px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:700">🔌 连接后端</button>
 </div>
@@ -251,7 +251,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 <div id="gateMask"></div>
 <div id="gateBox">
   <h2>需要登录</h2>
-  <div id="gateSub">本工具使用你自己的 RunningHub 账号运行 AI 应用。<br>登录后调用会计入应用运行次数与作者收益。</div>
+  <div id="gateSub"></div>
   <div id="gateSpin">正在检查登录状态…</div>
   <div id="gateForm" style="display:none">
     <div style="font-size:11px;color:var(--dim);margin-bottom:4px">账号（邮箱或手机号）</div>
@@ -268,7 +268,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
             style="width:100%;margin-top:8px;background:#2a2f3a;display:none">
       🌐 在浏览器中登录（自动导入）
     </button>
-    <a id="gateReg" href="https://www.runninghub.ai/Login/EmailRegisterV3" target="_blank" rel="noopener">
+    <a id="gateReg" href="https://www.runninghub.ai" target="_blank" rel="noopener">
       还没有账号？去 RunningHub 注册 →
     </a>
   </div>
@@ -295,8 +295,7 @@ input:focus,select:focus,textarea:focus{outline:1px solid var(--acc)}
 
   <div id="setpanel-session" style="display:none">
     <div class="hint" style="margin:4px 0 10px">
-      用你自己的 RunningHub 账号登录。<b>走 session 通道的调用会计入 App 运行次数与作者收益</b>，
-      API Key 通道不计入。
+      用你自己的 RunningHub 账号登录。
     </div>
 
     <div id="sessStatus" style="font-size:12px;color:var(--dim);margin:0 0 10px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#0d0f13">读取中…</div>
@@ -1731,7 +1730,7 @@ async function refreshSession(){
     $('sessLoginBox').style.display = logged ? 'none' : 'block';
 
     if(!d.configured){
-      el.innerHTML = '<span style="color:var(--err)">未登录</span> — 当前走 API Key 通道，调用不计入运行次数';
+      el.innerHTML = '<span style="color:var(--err)">未登录</span> — 未配置网页会话';
       return;
     }
     if(d.expired){
@@ -1741,7 +1740,7 @@ async function refreshSession(){
       return;
     }
     const rows = [
-      '<span style="color:var(--ok)">✓ 已登录</span> · 调用计入运行次数',
+      '<span style="color:var(--ok)">✓ 已登录</span>',
       '账号：' + _esc(d.email || d.name || d.userId || '-'),
       'userId：' + _esc(d.userId || '-'),
       '到期：' + _esc(_fmtTime(d.expire)),

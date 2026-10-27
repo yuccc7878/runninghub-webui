@@ -1,6 +1,14 @@
+## [0.5.10] - 2026-10-28
+### 修复
+- **浏览器自动登录失效**：`/api/session/import` 未加入未登录白名单，导入请求被 401 拦截，前端显示“导入失败/未登录”。已加入白名单。
+- **注册链接 404**：原 `Login/EmailRegisterV3` 路径无效，改为 RunningHub 主页 `https://www.runninghub.ai`。
+- **上传凭证兜底**：浏览器导入时若 `Rh-Comfy-Auth` 缺失，自动调 `/api/instance/access/auth` 重签。
+### 变更
+- 删除所有面向用户的「运行次数 / 作者收益 / 通道计数」说明文案（登录门禁、设置面板、状态栏）。
+
 ## [0.5.9] - 2026-10-28
 ### 头条
-- **接入网页会话通道**：可直接用 RunningHub 账号登录，走 App creator 通道提交任务，调用**计入应用运行次数与作者收益**（API Key 通道不计）。
+- **接入网页会话通道**：可直接用 RunningHub 账号登录，通过网页端接口提交任务。
 ### 新增
 - **`scripts/rh_session_channel.py`**（约 590 行）：session 通道完整封装。
   - `login` / `refresh_token` / `_sign_comfy_auth` / `ensure_fresh` / `logout` / `parse_jwt`
