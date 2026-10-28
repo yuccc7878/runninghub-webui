@@ -79,7 +79,14 @@ class MainActivity : AppCompatActivity() {
         ws.cacheMode = WebSettings.LOAD_NO_CACHE
         // 暴露原生桥，供前端调用「浏览器登录」
         webView.addJavascriptInterface(Bridge(), "AndroidBridge")
-        webView.webViewClient = WebViewClient()
+        // 页面加载完把 App 自己 WebView 里已有的 runninghub 登录态回灌一次：
+        // 用户上次在 App 内登录过就不用再登，也顺带刷新 token。
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(v: WebView?, url: String?) {
+                super.onPageFinished(v, url)
+                injectCachedSession()
+            }
+        }
         // 关键：让 <input type="file"> 能弹出系统文件选择器（上传参考图用）
         webView.webChromeClient = object : WebChromeClient() {
             override fun onShowFileChooser(
@@ -213,7 +220,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var loginWebView: WebView? = null
-    private var polling = false
 
     /**
      * 用独立的 WebView 打开 RunningHub 官网。
@@ -238,18 +244,15 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("取消") { _, _ -> cleanupLoginWebView() }
             .create()
 
-        // 官网是 SPA，登录成功不会重载页面，onPageFinished 不会再触发。
-        // 所以用轮询：弹窗存活期间每 800ms 探一次 localStorage。
+        // Cookie 必须显式开启：Google OAuth 走第三方 cookie，不开会登不上
+        try {
+            val cm = android.webkit.CookieManager.getInstance()
+            cm.setAcceptCookie(true)
+            cm.setAcceptThirdPartyCookies(lv, true)
+        } catch (e: Throwable) {}
+
         lv.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView?, url: String?): Boolean = false
-            override fun onPageFinished(v: WebView?, url: String?) {
-                super.onPageFinished(v, url)
-                // 页面加载完再启动轮询，避免在上一个页面的空轮询里打转
-                if (!polling) {
-                    polling = true
-                    startPoll(lv, dlg)
-                }
-            }
         }
         lv.webChromeClient = WebChromeClient()
 
@@ -258,13 +261,63 @@ class MainActivity : AppCompatActivity() {
         // /Login/login 是 SPA 路由，直接打开为空白页；主页有登录按钮可正常弹窗
         lv.loadUrl("https://www.runninghub.ai")
         dlg.show()
+        // 不依赖 onPageFinished：SPA 登录后不会重载页面，只挂在那里永远抓不到。
+        // 弹窗一出现就开始轮询，直到拿到 token 或弹窗关闭。
+        startPoll(lv, dlg)
     }
 
-    /** 弹窗存活期间轮询检测，拿到 token 立即导入并关窗 */
+    /** 从 Cookie 串里取指定 name 的值 */
+    private fun cookieValue(raw: String, name: String): String {
+        if (raw.isEmpty()) return ""
+        for (kv in raw.split(";")) {
+            val t = kv.trim()
+            if (t.startsWith(name + "=")) return t.substring(name.length + 1)
+        }
+        return ""
+    }
+
+    /**
+     * App 冷启动时，把自身 WebView 里已有的 runninghub cookie 回灌到后端。
+     * 用户上次在 App 内登录过，这里就能直接恢复，无需再次点「登录」。
+     * 只在后端确实未登录时才触发，避免覆盖用户刚从网页版导入的更完整会话。
+     */
+    private fun injectCachedSession() {
+        val cm = android.webkit.CookieManager.getInstance()
+        val raw = try { cm.getCookie("https://www.runninghub.ai") ?: "" } catch (e: Throwable) { "" }
+        val tok = cookieValue(raw, "Rh-Accesstoken")
+        if (tok.isBlank()) return
+
+        val payload = org.json.JSONObject().apply {
+            put("token", tok)
+            put("refresh", cookieValue(raw, "Rh-Refreshtoken"))
+            put("identify", cookieValue(raw, "Rh-Identify"))
+        }
+        // 后端已配置就跳过（前端状态更权威），否则回灌
+        webView.evaluateJavascript(
+            "(function(){" +
+            "  var p=" + org.json.JSONObject.quote(payload.toString()) + ";" +
+            "  fetch('/api/session').then(function(r){return r.json();}).then(function(d){" +
+            "    if(d && d.configured && !d.expired) return;" +
+            "    if(typeof onBrowserLoginResult==='function') onBrowserLoginResult(p);" +
+            "  }).catch(function(){});" +
+            "  return 'ok';" +
+            "})()",
+            null)
+    }
+
+
+    /**
+     * 弹窗存活期间轮询检测，拿到 token 立即导入并关窗。
+     *
+     * 双源合并，任一有 token 即可：
+     *   1) Cookie（主源）：同步、不依赖 JS 执行；登录成功即写入，
+     *      且 Rh-Identify 只在这里有（localStorage 里常常没有）。
+     *   2) localStorage（副源）：补 cookie 里没有的 Rh-Comfy-Auth 等字段。
+     */
     private fun startPoll(lv: WebView, dlg: android.app.AlertDialog) {
-        val js = """(function(){try{
+        val cm = android.webkit.CookieManager.getInstance()
+        val jsLocal = """(function(){try{
             return JSON.stringify({
-                url: location.href,
                 token: localStorage.getItem('Rh-Accesstoken')||'',
                 refresh: localStorage.getItem('Rh-Refreshtoken')||'',
                 identify: localStorage.getItem('Rh-Identify')||'',
@@ -272,35 +325,60 @@ class MainActivity : AppCompatActivity() {
                 comfyExpire: Number(localStorage.getItem('Rh-Comfy-Expire-In')||0),
                 expire: Number(localStorage.getItem('Rh-Expire-In')||0)
             });
-        }catch(e){return JSON.stringify({url:'', token:''});}})()"""
+        }catch(e){return '{}';}})()"""
 
         var tick: Runnable? = null
+        val done = java.util.concurrent.atomic.AtomicBoolean(false)
+
         tick = object : Runnable {
             override fun run() {
-                if (loginWebView == null) return          // 弹窗已关，停止
-                lv.evaluateJavascript(js) { ret ->
-                    val raw = try {
-                        org.json.JSONTokener(ret).nextValue() as? String ?: ret
-                    } catch (e: Throwable) { ret }
-                    val obj = try { org.json.JSONObject(raw) } catch (e: Throwable) { null }
-                    val tok = obj?.optString("token", "") ?: ""
-                    if (tok.isNotBlank()) {
-                        handler.post {
-                            dlg.dismiss()
-                            webView.evaluateJavascript(
-                                "onBrowserLoginResult(" + org.json.JSONObject.quote(raw) + ")", null)
-                        }
-                    } else {
-                        handler.postDelayed(tick!!, 800)  // 还没登录，继续等
+                if (loginWebView == null || done.get()) return   // 弹窗已关，停止
+
+                // 主源：Cookie
+                val rawCk = try {
+                    cm.getCookie("https://www.runninghub.ai") ?: ""
+                } catch (e: Throwable) { "" }
+                val ckTok = cookieValue(rawCk, "Rh-Accesstoken")
+
+                lv.evaluateJavascript(jsLocal) { ret ->
+                    if (loginWebView == null || done.get()) return@evaluateJavascript
+                    val ls = try {
+                        val r = org.json.JSONTokener(ret).nextValue() as? String ?: ret
+                        org.json.JSONObject(r)
+                    } catch (e: Throwable) { org.json.JSONObject() }
+
+                    val tok = ckTok.ifBlank { ls.optString("token", "") }
+                    if (tok.isBlank()) {
+                        handler.postDelayed(tick!!, 800)      // 还没登录，继续等
+                        return@evaluateJavascript
+                    }
+
+                    done.set(true)
+                    val payload = org.json.JSONObject().apply {
+                        put("token", tok)
+                        put("refresh", ls.optString("refresh", "")
+                            .ifBlank { cookieValue(rawCk, "Rh-Refreshtoken") })
+                        put("identify", ls.optString("identify", "")
+                            .ifBlank { cookieValue(rawCk, "Rh-Identify") })
+                        put("comfy", ls.optString("comfy", ""))
+                        put("comfyExpire", ls.optLong("comfyExpire", 0))
+                        put("expire", ls.optLong("expire", 0))
+                    }
+                    handler.post {
+                        // 落盘，下次冷启动可直接复用登录态
+                        try { cm.flush() } catch (e: Throwable) {}
+                        try { dlg.dismiss() } catch (e: Throwable) {}
+                        webView.evaluateJavascript(
+                            "onBrowserLoginResult(" + org.json.JSONObject.quote(payload.toString()) + ")",
+                            null)
                     }
                 }
             }
         }
-        handler.postDelayed(tick!!, 800)
+        handler.postDelayed(tick!!, 600)
     }
 
     private fun cleanupLoginWebView() {
-        polling = false
         try { loginWebView?.destroy() } catch (e: Throwable) {}
         loginWebView = null
     }

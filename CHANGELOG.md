@@ -1,3 +1,20 @@
+## [0.5.14] - 2026-10-28
+### 修复
+- **安卓登录要登两次**：原来只在 `onPageFinished` 里抓一次 token。
+  官网是 SPA，登录成功只做客户端路由跳转、不重载页面，抓取窗口早已错过，
+  所以第一次登录一定拿不到，要退出重新点一次才行。
+  改为弹窗出现即开始轮询（800ms），登录完成与抓取之间不再有时序依赖。
+- **抓取改用 Cookie 为主源**：`CookieManager.getCookie()` 同步返回、不依赖 JS 执行，
+  且 `Rh-Identify` 只在 Cookie 里有（localStorage 常常没有），以前缺这个字段会导致接口调不通。
+  localStorage 降为副源，用于补 `Rh-Comfy-Auth` 等字段。
+### 新增
+- **冷启动自动恢复登录**：App 启动后若自身 WebView 的 Cookie 里已有 token，
+  直接回灌后端，不用再点「一键登录」。
+- 登录 WebView 显式开启 Cookie + 第三方 Cookie（Google OAuth 依赖第三方 cookie）。
+- 抓到 token 后主动 `CookieManager.flush()` 落盘，避免进程被杀后丢失。
+### 版本
+- versionCode 26 -> 27，versionName 0.5.13 -> 0.5.14
+
 ## [0.5.13] - 2026-10-28
 ### 变更
 - **登录改为「一键登录」**：门禁页只留一个按钮，自动获取登录态，不再需要手动复制粘贴。

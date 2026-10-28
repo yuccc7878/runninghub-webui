@@ -334,7 +334,7 @@ def _restart_backend():
 # 更新检测（v0.5.1）：GitHub 最新 Release vs 当前版本
 # 免 API 方案：latest 重定向 → 解析 tag，绕开 GitHub API 限流(60次/h)
 # ============================================================
-CUR_VERSION = "0.5.13"          # 当前版本号（build.gradle versionName）
+CUR_VERSION = "0.5.14"          # 当前版本号（build.gradle versionName）
 _UPDATE_CACHE = {"ts": 0, "data": None}   # 15 分钟缓存，避免频繁打外网
 
 def _version_tuple(v):

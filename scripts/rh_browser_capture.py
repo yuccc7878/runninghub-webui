@@ -19,12 +19,21 @@
 import glob
 import json
 import os
+import re
 import sys
 
 ORIGIN = "https://www.runninghub.ai"
 
+# JWT 字面量：三段 base64url，用固定字符集判定结尾
+_JWT_RE = re.compile(rb"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*")
+_JWT_HEAD = re.compile(rb"eyJ")
+
+# 这几个字段的值是 JWT，长度字段解析失败时可退化为直接抓 JWT
+_JWT_FIELDS = {"Rh-Accesstoken", "Rh-Refreshtoken"}
+
 # 各平台常见 profile 位置。用 glob，兼容 Default / Profile 1 等。
 _PROFILE_PATTERNS = [
+    # 桌面平台
     # Linux
     "~/.config/google-chrome/*/Local Storage/leveldb",
     "~/.config/chromium/*/Local Storage/leveldb",
@@ -39,9 +48,14 @@ _PROFILE_PATTERNS = [
     "%LOCALAPPDATA%/Google/Chrome/User Data/*/Local Storage/leveldb",
     "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Local Storage/leveldb",
     "%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data/*/Local Storage/leveldb",
-    # Android（App 沙箱通常读不到，读得到就用）
+    # ---- Android ----
+    # 宿主 App 自己的 WebView（在 Termux/proot 内通常唯一可见的 WebView 数据）。
+    # 用 RH_APP_ID 或环境变量兜底；下面几个通配由 _android_webview_dirs 动态补全。
     "/data/data/com.android.chrome/app_chrome/*/Local Storage/leveldb",
     "/data/user/0/com.android.chrome/app_chrome/*/Local Storage/leveldb",
+    "/data/data/com.quark.browser/app_webview/*/Local Storage/leveldb",
+    "/data/data/com.UCMobile/app_webview/*/Local Storage/leveldb",
+    "/data/data/com.microsoft.emmx/app_chrome/*/Local Storage/leveldb",
 ]
 
 # 需要取出的字段：localStorage key -> 输出字段名
@@ -94,18 +108,12 @@ def _is_plausible_text(s):
     return printable / len(s) >= 0.85
 
 
-def _parse_leveldb_file(path, origin):
-    """从单个 .ldb / .log 文件中提取 origin 下的所有键值。"""
+def _parse_with_origin_prefix(data, origin):
+    """标准 Chromium 布局：完整的 "_origin\\x00\\x01" 前缀可见时按 keyLen 解析。"""
     found = {}
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-    except Exception:
-        return found
-
     origin_b = origin.encode("utf-8")
     marker = b"_" + origin_b + b"\x00\x01"
-    prefix_len = len(origin_b) + 3  # "_" + origin + "\x00\x01"
+    prefix_len = len(origin_b) + 3
 
     idx = 0
     while True:
@@ -144,13 +152,111 @@ def _parse_leveldb_file(path, origin):
 
         val = _decode_value(raw)
         if val and _is_plausible_text(val):
-            name = key[len(marker):]
-            found[name] = val
+            found[key[len(marker):]] = val
             idx = vpos + vlen
         else:
             idx = kstart + 1
 
     return found
+
+
+def _try_jwt_after(data, key_end):
+    """key 之后紧跟的 JWT（兼容无法可靠解析长度字段的 leveldb 变体）。
+
+    MIUI 浏览器等厂商 WebView 写入的 value 长度前缀不是标准 varint
+    （实测 `01 4c 85 02 00 00 00 00 01 <320字节token>`，长度字段解码失败），
+    与其逆向各家私有编码，不如直接在 key 之后定位第一个 JWT 字面量。
+    JWT 的字符集固定（base64url + 两个点），结尾天然可判定。
+    """
+    window = data[key_end:key_end + 16]
+    m = _JWT_HEAD.search(window)
+    if not m:
+        return None
+    start = key_end + m.start()
+    m2 = _JWT_RE.match(data, start)
+    if not m2:
+        return None
+    return m2.group().decode("ascii", "replace")
+
+
+def _parse_leveldb_file(path, origin):
+    """从单个 .ldb / .log 文件中提取 origin 下的所有键值。"""
+    found = {}
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except Exception:
+        return found
+
+    # 只认 key 名（真实 key 在 leveldb 里可能带共享前缀压缩，
+    # 未必能还原出完整的 "_origin\x00\x01" 前缀，直接按 key 名定位更稳）
+    for real_key in _FIELD_MAP.keys():
+        marker = real_key.encode("utf-8")
+        idx = 0
+        while True:
+            idx = data.find(marker, idx)
+            if idx < 0:
+                break
+            key_end = idx + len(marker)
+
+            # 方式一：key 尾紧跟标准 varint 长度 + encFlag
+            val = None
+            try:
+                vlen, vpos = _read_varint(data, key_end)
+                if 0 < vlen <= 5 * 1024 * 1024 and vpos < len(data):
+                    raw = data[vpos:vpos + vlen]
+                    if len(raw) >= vlen:
+                        cand = _decode_value(raw)
+                        if cand and _is_plausible_text(cand):
+                            val = cand
+            except Exception:
+                val = None
+
+            # 方式二：长度字段解析不出来时，直接抓 key 后的 JWT
+            if val is None and real_key in _JWT_FIELDS:
+                val = _try_jwt_after(data, key_end)
+
+            if val:
+                found[real_key] = val
+                idx = key_end
+            else:
+                idx = key_end
+
+    # 原逻辑：完整 origin 前缀可见时也能解析（保留给标准 Chromium 布局）
+    found.update(_parse_with_origin_prefix(data, origin))
+    return found
+
+
+def _android_webview_dirs():
+    """列出 Android 上可访问的 WebView localStorage 目录。
+
+    为什么不能只靠 glob：在 Termux / proot 环境里 /data/data 只挂载了宿主 App
+    自己（ls /data/data 只返回 com.xxx），通配符无法枚举出其他包名。
+    所以这里直接扫描 /data/data/<pkg>/ 下真实存在的目录，再拼 WebView 存放路径。
+    """
+    out = []
+    roots = ["/data/data", "/data/user/0"]
+    for root in roots:
+        try:
+            if not os.path.isdir(root):
+                continue
+            pkg_dirs = os.listdir(root)
+        except Exception:
+            continue
+        for pkg in pkg_dirs:
+            for sub in ("app_webview", "app_chrome", "app_webview_sandbox"):
+                base = os.path.join(root, pkg, sub)
+                if not os.path.isdir(base):
+                    continue
+                try:
+                    profiles = os.listdir(base)
+                except Exception:
+                    continue
+                for prof in profiles:
+                    d = os.path.join(base, prof, "Local Storage", "leveldb")
+                    if os.path.isdir(d) and d not in out:
+                        out.append(d)
+    return out
 
 
 def _candidate_dirs():
@@ -161,6 +267,9 @@ def _candidate_dirs():
         for hit in glob.glob(p):
             if os.path.isdir(hit) and hit not in seen:
                 seen.append(hit)
+    for d in _android_webview_dirs():
+        if d not in seen:
+            seen.append(d)
     seen.sort(key=lambda d: os.path.getmtime(d), reverse=True)
     return seen
 
