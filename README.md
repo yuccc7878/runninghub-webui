@@ -74,12 +74,12 @@ python3 scripts/rh_webui.py --port 8765
 
 本项目自带完整的安卓壳工程（Chaquopy 内嵌 Python 后端 + WebView），GitHub Actions 每次发版自动构建签名 APK。**装进手机就是一台随身跑图台**，本地后端和 API Key 全部在手机里，不依赖电脑。
 
-[![Download APK](https://img.shields.io/badge/下载_APK-v0.4.7-brightgreen)](https://github.com/yuccc7878/runninghub-webui/releases/download/v0.4.7/app-release-v0.4.7.apk)
+[![Download APK](https://img.shields.io/badge/下载_APK-v0.5.15-brightgreen)](https://github.com/yuccc7878/runninghub-webui/releases/download/v0.5.15/app-release.apk)
 
 | 项 | 说明 |
 |---|---|
-| 最新版本 | **v0.4.7**（约 38.7 MB） |
-| 直接下载 | [app-release-v0.4.7.apk](https://github.com/yuccc7878/runninghub-webui/releases/download/v0.4.7/app-release-v0.4.7.apk) |
+| 最新版本 | **v0.5.15**（约 38.8 MB） |
+| 直接下载 | [app-release.apk](https://github.com/yuccc7878/runninghub-webui/releases/download/v0.5.15/app-release.apk) |
 | 历史版本 | [Releases 页面](https://github.com/yuccc7878/runninghub-webui/releases) |
 | 系统要求 | Android 7.0+（minSdk 24） |
 | 包名 | `com.yuccc.runninghub` |
