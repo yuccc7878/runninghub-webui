@@ -430,8 +430,8 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  # 竖版仰躺 W 开腿（v3 定稿配置）
-  python rh_krea2_nsfw.py --preset lying_w --ratio 9:16 --mp 0.5 --album /sdcard/Pictures --album-name 洛宝仰躺W开腿
+  # 竖版仰躺 W 开腿（示例）
+  python rh_krea2_nsfw.py --preset lying_w --ratio 9:16 --mp 0.5 --album /sdcard/Pictures --album-name example_lying_w
 
   # 横版三视图
   python rh_krea2_nsfw.py --preset 3view --ratio 16:9 --mp 1.0

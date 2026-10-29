@@ -334,7 +334,7 @@ def _restart_backend():
 # 更新检测（v0.5.1）：GitHub 最新 Release vs 当前版本
 # 免 API 方案：latest 重定向 → 解析 tag，绕开 GitHub API 限流(60次/h)
 # ============================================================
-CUR_VERSION = "0.5.14"          # 当前版本号（build.gradle versionName）
+CUR_VERSION = "0.5.15"          # 当前版本号（build.gradle versionName）
 _UPDATE_CACHE = {"ts": 0, "data": None}   # 15 分钟缓存，避免频繁打外网
 
 def _version_tuple(v):
@@ -782,22 +782,18 @@ REGISTRY = {
         ],
     },
     "h3_flf_video": {
-        "name": "MiniMaxH3 首尾帧视频 (I2V)",
-        "label": "H3 首尾帧",
+        "name": "MiniMaxH3 首帧视频 (App · 最长30s)",
+        "label": "H3 首帧",
         "group": "video",
-        "hint": "首帧接尾帧，中间补运动",
-        "desc": "首帧图(→尾帧图) → 视频。支持单段/续接，输出 mp4",
+        "hint": "单张首帧 → 视频，支持 5–30 秒",
+        "desc": "首帧图 → 视频，输出 mp4（含音频）。App: 2115566654334791681。"
+                "8 步 Turbo 加速 LoRA 与采样器已内置，无需配置。"
+                "时长超过 15 秒会超出模型训练范围，可能出现动作停滞或脸部漂移。",
         "module": "rh_h3_flf_api", "mode": "video",
         "params": [
             {"k": "first_ref", "label": "首帧图", "type": "ref", "accepts": "image", "def": ""},
-            {"k": "last_ref", "label": "尾帧图(可选)", "type": "ref", "accepts": "image", "def": ""},
-            {"k": "ratio", "label": "比例", "type": "select", "options": ["9:16 (Portrait Widescreen)", "16:9 (Widescreen)", "1:1 (Square)", "3:4 (Portrait Standard)", "4:3 (Standard)", "21:9 (Ultrawide)"], "def": "9:16 (Portrait Widescreen)"},
-            {"k": "megapixels", "label": "分辨率", "type": "select", "options": [{"v": "0.25", "label": "0.25 MP（低清快出）"}, {"v": "0.4", "label": "0.4 MP（标清）"}, {"v": "0.6", "label": "0.6 MP（推荐）"}, {"v": "0.9", "label": "0.9 MP（高清）"}, {"v": "1.2", "label": "1.2 MP（超清）"}], "def": "0.6"},
-            {"k": "duration", "label": "时长(秒)", "type": "float", "def": 5, "help": "视频长度，越长越贵"},
-            {"k": "steps", "label": "步数", "type": "int", "def": 8},
-            {"k": "lora", "label": "LoRA", "type": "select", "options": [{"v": "none", "label": "无"}, {"v": "synthpussy", "label": "synthpussy（阴部细节加强，实测✓）"}, {"v": "realface", "label": "realface（人物真实质感，触发词 r34l1sm）"}, {"v": "cinematic", "label": "cinematic（电影级质感，触发词 DY）"}, {"v": "physics", "label": "physics（物理运动，不稳定）"}, {"v": "nokia", "label": "nokia（诺基亚复古低清，触发词 nokiastyle）"}], "def": "none"},
-            {"k": "lora_strength", "label": "LoRA强度", "type": "float", "def": 0.9, "help": "仅 LoRA≠none 时生效", "group": "advanced"},
-            {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机", "group": "advanced"},
+            {"k": "megapixels", "label": "分辨率", "type": "select", "options": [{"v": "0.4", "label": "0.4 MP（标清 · 480×832，默认）"}, {"v": "0.6", "label": "0.6 MP（推荐）"}, {"v": "0.9", "label": "0.9 MP（高清）"}, {"v": "1.0", "label": "1.0 MP（原生 720p · 慢，人脸清晰）"}], "def": "0.4", "help": "0.4MP 在全身远景下人脸占比小，容易崩脸。人脸重要时建议 1.0"},
+            {"k": "duration", "label": "时长(秒)", "type": "float", "def": 10, "help": "5–30 秒。秒数由工作流内 134 节点自动换算成帧（17n+5 对齐）。超过 15 秒超出训练范围"},
         ],
     },
     "h3_omni_video": {
@@ -1227,20 +1223,13 @@ def _run_task(task_id, script_key, params):
                 TASKS[task_id]["status"] = "submitting"
             if script_key == "h3_flf_video":
                 first_ref = params.get("first_ref") or ""
-                last_ref = params.get("last_ref") or ""
                 first_path = _resolve_ref_path(first_ref)
-                last_path = _resolve_ref_path(last_ref)
                 res = mod.run(
                     prompt_text=prompt,
                     first_frame_path=first_path,
-                    last_frame_path=last_path,
-                    aspect_ratio=params.get("ratio", "9:16 (Portrait Widescreen)"),
-                    megapixels=float(params.get("megapixels", 0.6)),
-                    duration=float(params.get("duration", 5)),
-                    steps=int(params.get("steps", 8)),
-                    noise_seed=seed,
+                    megapixels=float(params.get("megapixels", 0.4)),
+                    duration=float(params.get("duration", 10)),
                     download_dir=str(OUT_DIR),
-                    lora=lora, lora_strength=lora_st,
                     on_submit=_on_submit,
                 )
                 videos = res.get("videos", []) or []
