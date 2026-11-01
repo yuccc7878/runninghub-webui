@@ -57,5 +57,8 @@ workflows/zimage_api_format.json
 workflows/zimage_ui_format.json
 workflows/wananimate/
 
+# ---- 逆向笔记 / 抓包资料（含他人账号信息与工作流导出，绝不入库） ----
+workflows/_recon/
+**/_recon/
 # ---- 本地 skill（逆向笔记，不入库） ----
 skills/
