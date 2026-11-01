@@ -48,6 +48,7 @@ ControlNet 骨架控制（skill D.11）：⚠️ 已搁置
 """
 
 import json
+import re
 import time
 import uuid
 import urllib.request
@@ -179,8 +180,57 @@ def apply_lora(p, lora=None, strength=None, verbose=True):
     return p, True
 
 # ==================== 基础请求 ====================
+# ===== 通道开关 =====
+# True  = 走账号会话（三件套认证，ComfyUI 原生端点，无需 API Key）
+# False = 走原 /proxy/<api-key> 通道（需要 API Key）
+#
+# 实测 2026-11-02：带上 Authorization + Rh-Identify + Rh-Comfy-Auth 三件套后，
+# 可以直接访问 /prompt、/queue、/history/<id>、/object_info 等 ComfyUI 原生端点，
+# 不需要 URL 里带 API Key。因此全参数控制能力（steps/seed/denoise/lora）完全保留。
+USE_SESSION_CHANNEL = True
+
+
+def _session_headers():
+    """取会话三件套。不可用时返回 None。"""
+    try:
+        import rh_session_channel as SC
+        if not SC.is_configured():
+            return None
+        s = SC.get_session()
+        tok, ident, comfy = s.get("token"), s.get("identify"), s.get("comfy")
+        if not (tok and ident and comfy):
+            return None
+        return {"Authorization": tok, "Rh-Identify": ident, "Rh-Comfy-Auth": comfy}
+    except Exception:
+        return None
+
+
+def _strip_proxy(url):
+    """把 {BASE}/proxy/<key>/xxx 还原成 {BASE}/xxx；非 proxy 形态原样返回。"""
+    m = re.match(r"^(https?://[^/]+)/proxy/[^/]+(/.*)$", url)
+    if m:
+        return m.group(1) + m.group(2)
+    return url
+
+
 def _request(url, method="GET", body=None, headers=None, timeout=120):
     data = json.dumps(body).encode() if body is not None else None
+
+    sh = _session_headers() if USE_SESSION_CHANNEL else None
+    if sh is not None:
+        # 账号通道：去掉 URL 里的 API Key，改用三件套认证
+        url = _strip_proxy(url)
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("accept", "application/json")
+        if body is not None:
+            req.add_header("content-type", "application/json")
+        for k, v in sh.items():
+            req.add_header(k, v)
+        for k, v in (headers or {}).items():
+            req.add_header(k, v)
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        return json.loads(resp.read().decode())
+
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("accept", "application/json")
     if body is not None:
@@ -220,7 +270,27 @@ def upload_image(file_path: str) -> str:
 
 # ==================== 2. 拉取并构造 prompt ====================
 def get_workflow_prompt(workflow_id: str = WORKFLOW_ID) -> dict:
-    """拉取工作流 API JSON，返回 prompt dict"""
+    """拉取工作流 API JSON，返回 prompt dict。
+
+    账号通道下 getJsonApiFormat 会因缺 apiKey 报 301 user not exist，
+    改用 ComfyUI 原生 /object_info 拼不出完整 prompt，
+    因此这里优先走会话版端点；失败再退回 apiKey 形态。
+    """
+    # 账号通道：平台没有不需要 apiKey 的 prompt 导出接口（实测
+    # /api/workflow/getJsonApiFormat、/api/openapi/getJsonApiFormat 都要 apiKey，
+    # 空 key 返回 301 user not exist）。因此改为读本地缓存的 prompt JSON。
+    sh = _session_headers() if USE_SESSION_CHANNEL else None
+    if sh is not None:
+        d = _fetch_prompt_via_session(workflow_id)
+        if d is not None:
+            return d
+        d = _load_cached_prompt(workflow_id)
+        if d is not None:
+            return d
+        raise RuntimeError(
+            "账号通道下无法拉取工作流 prompt（平台接口需 API Key），"
+            "且本地缓存缺失。请检查 workflows/ 下的 prompt 缓存文件。")
+
     d = _request(
         f"{BASE}/api/openapi/getJsonApiFormat",
         method="POST",
@@ -230,6 +300,57 @@ def get_workflow_prompt(workflow_id: str = WORKFLOW_ID) -> dict:
     if d.get("code") != 0:
         raise RuntimeError(f"getJsonApiFormat failed: {d}")
     return json.loads(d["data"]["prompt"])
+
+
+# 顺序很重要：必须与 NODE 映射一致（4=KSampler, 5=CLIPTextEncode, 16/17=Int宽高）
+_PROMPT_CACHE_CANDIDATES = (
+    "legacy_zimage_2108658505526910977_api.json",
+    "zimage_api_format.json",
+)
+
+
+def _load_cached_prompt(workflow_id):
+    """从 workflows/ 目录读本地缓存的 prompt JSON。找不到返回 None。"""
+    base = Path(__file__).resolve().parent.parent / "workflows"
+    for name in _PROMPT_CACHE_CANDIDATES:
+        fp = base / name
+        if not fp.exists():
+            continue
+        try:
+            d = json.loads(fp.read_text(encoding="utf-8"))
+            # 必须与 NODE 映射对齐：4 号节点得是 KSampler
+            if (isinstance(d, dict) and "4" in d
+                    and (d.get("4") or {}).get("class_type") == "KSampler"):
+                return d
+        except Exception:
+            continue
+    return None
+
+
+def _fetch_prompt_via_session(workflow_id):
+    """用会话三件套拉工作流 prompt。拿不到返回 None。"""
+    import urllib.request as _u
+    sh = _session_headers()
+    if not sh:
+        return None
+    for path, body in (
+        ("/api/workflow/getJsonApiFormat", {"workflowId": workflow_id}),
+        ("/api/openapi/getJsonApiFormat", {"workflowId": workflow_id}),
+    ):
+        try:
+            data = json.dumps(body).encode()
+            req = _u.Request(BASE + path, data=data, method="POST")
+            req.add_header("Content-Type", "application/json")
+            for k, v in sh.items():
+                req.add_header(k, v)
+            r = json.loads(_u.urlopen(req, timeout=30).read().decode("utf-8", "replace"))
+            if r.get("code") == 0:
+                p = (r.get("data") or {}).get("prompt")
+                if p:
+                    return json.loads(p) if isinstance(p, str) else p
+        except Exception:
+            continue
+    return None
 
 
 def build_prompt(

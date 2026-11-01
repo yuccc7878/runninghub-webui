@@ -259,8 +259,16 @@ def extract_outputs(entry):
     if not isinstance(entry, dict):
         return files
     for nid, out in (entry.get("outputs") or {}).items():
-        for key in ("videos", "gifs", "images", "audio"):
-            for f in (out.get(key) or []):
+        if not isinstance(out, dict):
+            continue
+        # 不再只遍历固定的 videos/gifs/images/audio：CompressImages 等节点可能把
+        # 压缩包挂在其它数组键下，漏掉就会取不到产物。
+        for key, val in out.items():
+            if not isinstance(val, list):
+                continue
+            for f in val:
+                if not isinstance(f, dict):
+                    continue
                 fn = f.get("filename")
                 if not fn:
                     continue
@@ -347,9 +355,13 @@ def run(source_face=None, src_video=None, max_side=MAX_SIDE_DEFAULT,
 
     entry = poll_history(pid, api_key=key)
     outs = extract_outputs(entry)
+    # 工作流改成只出 zip 后，产物不再是 mp4/png：白名单必须包含压缩包，
+    # 否则 download_output 一次都不执行，产物只留在远端、本地不落盘。
+    ARTIFACT_EXT = (".mp4", ".webm", ".mov", ".png", ".jpg", ".jpeg", ".webp",
+                    ".zip", ".7z", ".tar", ".gz")
     saved = []
     for o in outs:
-        if str(o.get("filename") or "").lower().endswith((".mp4", ".webm", ".png", ".jpg", ".webp")):
+        if str(o.get("filename") or "").lower().endswith(ARTIFACT_EXT):
             path = download_output(o, download_dir)
             if path:
                 saved.append(os.path.basename(path))

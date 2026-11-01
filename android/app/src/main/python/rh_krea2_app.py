@@ -394,7 +394,9 @@ def download(file_url, dest_dir="outputs"):
     Path(dest_dir).mkdir(parents=True, exist_ok=True)
     name = os.path.basename(file_url.split("?")[0]) or f"out_{int(time.time())}.png"
     dest = os.path.join(str(dest_dir), name)
-    if not name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+    # zip 是工作流改造后（只出压缩包）的唯一产物，必须原样保留扩展名，
+    # 否则会被追加 .png 变成 xxx.zip.png
+    if not name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".zip")):
         dest += ".png"
     urllib.request.urlretrieve(file_url, dest)
     return dest

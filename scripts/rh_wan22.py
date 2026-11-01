@@ -233,7 +233,12 @@ class PollTimeout(Exception):
 
 
 def poll(task_id, max_wait=3600, interval=10, verbose=True, on_ping=None):
-    """轮询到完成，返回产物列表 [{fileUrl, fileType, ...}]"""
+    """轮询到完成，返回产物列表 [{fileUrl, fileType, ...}]
+
+    注意：session 通道下 query_outputs 先拉列表再按 taskId 过滤，新任务有
+    2~3 分钟同步延迟。若 code 已为 SUCCESS 但 outputs 为空，说明列表尚未
+    写入产物（不是真的没产物），应继续等而不是直接返回空列表。
+    """
     t0 = time.time()
     last_ping = 0
     while time.time() - t0 < max_wait:
@@ -241,7 +246,15 @@ def poll(task_id, max_wait=3600, interval=10, verbose=True, on_ping=None):
                   {"taskId": task_id, "apiKey": API_KEY}, timeout=40)
         code = d.get("code")
         if code == CODE_OK:
-            return d.get("data") or []
+            outs = d.get("data") or []
+            if outs:
+                return outs
+            # SUCCESS 但产物列表为空：session 通道列表延迟，继续等
+            elapsed = int(time.time() - t0)
+            if verbose and elapsed % 60 < interval:
+                print(f"[轮询] {elapsed}s 状态已成功但产物列表未同步，继续等待")
+            time.sleep(interval)
+            continue
         if code == CODE_FAILED:
             fr = (d.get("data") or {}).get("failedReason") or {}
             node = fr.get("node_name") or "?"
@@ -255,7 +268,15 @@ def poll(task_id, max_wait=3600, interval=10, verbose=True, on_ping=None):
             if isinstance(tb, list):
                 tb = "\n".join(str(x) for x in tb)
             tail = tb.strip().splitlines()[-1] if tb.strip() else ""
-            raise RuntimeError(f"任务失败 [{node}] {etype}: {tail[:300]}")
+            detail = f"[{node}] {etype}"
+            if tail:
+                detail += f": {tail[:300]}"
+            elif fr.get("msg"):
+                detail += f": {str(fr['msg'])[:300]}"
+            else:
+                # 拿不到结构化原因时，把原始返回一并抛出，避免只看得到 [?] ?:
+                detail += f" （无详细原因，原始返回：{json.dumps(d, ensure_ascii=False)[:300]}）"
+            raise RuntimeError(f"任务失败 {detail}")
 
         elapsed = int(time.time() - t0)
         if on_ping and elapsed - last_ping >= 30:
@@ -290,6 +311,33 @@ def download_video(item, dest_dir="."):
     dest_dir.mkdir(parents=True, exist_ok=True)
     url = item.get("fileUrl") or item.get("file_url")
     name = os.path.basename(url.split("?")[0]) or f"out_{int(time.time())}.mp4"
+    dest = dest_dir / name
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=600) as r, open(dest, "wb") as f:
+        f.write(r.read())
+    return str(dest)
+
+
+def extract_archives(items):
+    """从产物列表挑出压缩包产物（工作流改成只出 zip 后，产物不再是 mp4）"""
+    out = []
+    for it in items or []:
+        url = it.get("fileUrl") or it.get("file_url") or ""
+        if not url:
+            continue
+        if url.split("?")[0].lower().endswith((".zip", ".7z", ".tar", ".gz")):
+            out.append(it)
+    return out
+
+
+def download_artifact(item, dest_dir="."):
+    """下载任意类型产物（视频或压缩包），文件名取自 URL。"""
+    url = item.get("fileUrl") or item.get("file_url")
+    if not url:
+        raise RuntimeError(f"产物缺少 fileUrl: {item}")
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    name = os.path.basename(url.split("?")[0]) or f"out_{int(time.time())}.bin"
     dest = dest_dir / name
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=600) as r, open(dest, "wb") as f:
@@ -354,18 +402,25 @@ def run(
     # 4. 轮询
     items = poll(tid, verbose=verbose, on_ping=on_ping)
     videos = extract_videos(items)
+    # 工作流已改为只输出 zip：zip 不在 videos 里，必须单独挑出来一起下载，
+    # 否则下载循环拿到空列表，产物只留在远端、本地不落盘。
+    archives = extract_archives(items)
     if verbose:
-        print(f"  产物: {len(items)} 项，其中视频 {len(videos)} 个")
+        print(f"  产物: {len(items)} 项，其中视频 {len(videos)} 个、压缩包 {len(archives)} 个")
 
-    # 5. 下载
-    saved = []
-    for v in videos:
-        path = download_video(v, download_dir)
-        saved.append(path)
+    # 5. 下载（视频 + 压缩包，统一用同一个下载器）
+    saved_videos, saved_archives = [], []
+    for it in list(videos) + list(archives):
+        path = download_artifact(it, download_dir)
+        if path.lower().endswith((".zip", ".7z", ".tar", ".gz")):
+            saved_archives.append(path)
+        else:
+            saved_videos.append(path)
         if verbose:
             print(f"    ↓ {path}")
-
-    return {"task_id": tid, "items": items, "videos": saved}
+    return {"task_id": tid, "items": items,
+            "videos": saved_videos, "archives": saved_archives,
+            "files": saved_videos + saved_archives}
 
 
 # ==================== CLI ====================

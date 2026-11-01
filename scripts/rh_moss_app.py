@@ -60,6 +60,7 @@ NODE = {
     "ksampler":    "16",
     "pos":         "4",
     "resolution":  "23",
+    "latent":      "6",     # EmptyFlux2LatentImage（width/height 直传口）
 }
 
 # App 实际暴露的字段（network 实测，兜底用；正常走 /api/webapp/detail 实时拉）
@@ -177,13 +178,22 @@ def exposed_fields(webapp_id=APP_ID):
 
 # ==================== 构造 nodeInfoList ====================
 def build_node_info(prompt_text=None, ratio=None, steps=None,
-                    fields=None, webapp_id=APP_ID):
+                    fields=None, webapp_id=APP_ID,
+                    width=None, height=None):
     """
-    构造 nodeInfoList。只提交 App 真正暴露的字段——
-    提交未暴露字段会被平台忽略或报错。
+    构造 nodeInfoList。
 
     ratio  可传完整选项值或短名（"9:16" / "portrait"），会自动展开。
     steps  4 = 约 12s（快，细节少）；8 = 约 33s（默认，细节足）。
+    width/height  精确像素（可选），优先级高于 ratio。
+
+    ⚠️ 关于 width/height（2026-11-02 实测）：
+      画布上 6 号 EmptyFlux2LatentImage 的 width/height 输入是有连线的
+      （来自 23 号 ResolutionSelector），App 发布时也没暴露这两个字段。
+      但把它们写进 nodeInfoList，平台仍会采用，且优先级高于 23.aspect_ratio：
+        - 单传 6.width=832/6.height=1216（ratio=1:1）→ 出图 832×1216
+        - 同时传 ratio=9:16 与 6.width/height=1024/1024 → 出图 1024×1024
+      所以传了 width/height 就等于绕开比例枚举，可精确指定像素。
     """
     if fields is None:
         fields = exposed_fields(webapp_id)
@@ -198,9 +208,23 @@ def build_node_info(prompt_text=None, ratio=None, steps=None,
             out.append({"nodeId": str(nid), "fieldName": fname,
                         "fieldValue": str(val)})
 
+    def add_raw(nid, fname, val):
+        """不过滤暴露白名单——用于 6.width/height 这类未在 App 上暴露、
+        但实测平台会采用的字段。"""
+        if val is None or val == "":
+            return
+        out.append({"nodeId": str(nid), "fieldName": fname,
+                    "fieldValue": str(val)})
+
     add(NODE["pos"], "text", prompt_text)
-    add(NODE["resolution"], "aspect_ratio", resolve_ratio(ratio))
     add(NODE["ksampler"], "steps", steps)
+
+    # 精确像素优先；否则退回比例枚举
+    if width and height:
+        add_raw(NODE["latent"], "width", int(width))
+        add_raw(NODE["latent"], "height", int(height))
+    else:
+        add(NODE["resolution"], "aspect_ratio", resolve_ratio(ratio))
     return out
 
 
@@ -274,13 +298,17 @@ def download(file_url, dest_dir="outputs"):
 # ==================== 一站式入口 ====================
 def run(prompt_text=None, ratio=DEFAULT_RATIO, steps=None,
         webapp_id=APP_ID, download_dir="outputs",
-        on_submit=None, verbose=True, **_ignored):
+        on_submit=None, verbose=True, width=None, height=None, **_ignored):
     """
-    MOSS 文生图：提示词 + 比例 + 步数。
+    MOSS 文生图：提示词 + 步数 + 尺寸。
+
+    尺寸有两种给法，二选一：
+      width/height  精确像素，直接写 6 号 EmptyFlux2LatentImage。
+                    实测优先级高于 ratio，可绕开 8 档比例枚举。
+      ratio         比例枚举，由 23 号 ResolutionSelector 折算（megapixels 固定 2.0）。
 
     与 rh_zimage_app / rh_krea2_app 的签名差异：
       本 App 没有 LoRA 位、没有参考图、没有 denoise。
-      宽高由 ratio 决定（megapixels 锁定 2.0），不接受 width/height。
       **_ignored 用于吃掉 webui 传来的 lob 参数，避免 TypeError。
 
     返回 dict：
@@ -290,13 +318,20 @@ def run(prompt_text=None, ratio=DEFAULT_RATIO, steps=None,
     ratio_full = resolve_ratio(ratio) or DEFAULT_RATIO
 
     ni = build_node_info(prompt_text=prompt_text, ratio=ratio_full,
-                         steps=steps, webapp_id=webapp_id)
+                         steps=steps, webapp_id=webapp_id,
+                         width=width, height=height)
     if verbose:
-        size = RATIO_SIZES.get(ratio_full)
-        size_s = f"{size[0]}×{size[1]}" if size else "?"
-        print(f"[App] {webapp_id} 提交 {len(ni)} 个字段: "
-              f"{', '.join(n['nodeId'] + '.' + n['fieldName'] for n in ni)}")
-        print(f"[参数] {ratio_full} → 约 {size_s} | steps={steps}")
+        if width and height:
+            size_s = f"{int(width)}×{int(height)}"
+            print(f"[App] {webapp_id} 提交 {len(ni)} 个字段: "
+                  f"{', '.join(n['nodeId'] + '.' + n['fieldName'] for n in ni)}")
+            print(f"[参数] 精确尺寸 {size_s} | steps={steps}")
+        else:
+            size = RATIO_SIZES.get(ratio_full)
+            size_s = f"{size[0]}×{size[1]}" if size else "?"
+            print(f"[App] {webapp_id} 提交 {len(ni)} 个字段: "
+                  f"{', '.join(n['nodeId'] + '.' + n['fieldName'] for n in ni)}")
+            print(f"[参数] {ratio_full} → 约 {size_s} | steps={steps}")
 
     tid = submit(ni, webapp_id=webapp_id)
     if verbose:

@@ -1,3 +1,343 @@
+## [0.5.18] - 2026-11-02
+
+全量代码复查 + 双端同步 + 版本号统一。
+
+### 版本号统一到 0.5.18
+
+此前四处不一致：`scripts/rh_webui.py` 的 `CUR_VERSION` 停在 `0.5.15`，
+而 `webui.html` / `android/.../webui.html` / `build.gradle` 是 `0.5.17`。
+`CUR_VERSION` 用于「检查更新」比对 GitHub Release，落后会导致误报有新版本。
+
+| 位置 | 改前 | 改后 |
+|---|---|---|
+| `scripts/rh_webui.py` `CUR_VERSION` | 0.5.15 | 0.5.18 |
+| `webui.html` meta / title / h1 | 0.5.17 | 0.5.18 |
+| `android/app/build.gradle` `versionName` | 0.5.17 | 0.5.18 |
+| `android/app/build.gradle` `versionCode` | 30 | 31 |
+
+### 双端同步（这是本轮主要问题）
+
+`android/app/src/main/python/` 与 `android/app/src/main/assets/` 长期落后，
+上一轮所有改动（账号通道、断 key 开关、HIDDEN_SCRIPTS）都没同步进去，
+**打包出来的 APK 是旧逻辑**。
+
+已同步 4 个文件，同步后 17 个共用文件 md5 全部一致：
+
+- `scripts/rh_webui.py` → `android/app/src/main/python/rh_webui.py`
+- `scripts/rh_zimage_api.py` → `android/app/src/main/python/rh_zimage_api.py`
+- `webui.html` → `android/app/src/main/assets/webui.html`（MainActivity 实际加载这份）
+- `webui.html` → `android/app/src/main/webui.html`（冗余副本，git 跟踪但无引用）
+
+### EMBEDDED_SCRIPTS 离线兜底表重生成
+
+`webui.html` 内嵌的离线参数表与 `REGISTRY` 漂移：
+
+- `h3_omni_video` 是旧配置（有已废弃的 `prompt_text` 字段，缺 `ratio` 规范）
+- 4 个条目的 `hint` 被序列化成字符串 `'None'`
+
+用 `scripts/_sync_embedded.py` 重新生成，现与 `REGISTRY` 逐字段一致（8 个 key 全对齐）。
+
+### 复查结论
+
+- 85 个 py 文件语法全部通过
+- `REGISTRY` 引用的 8 个模块 + `rh_webui` 的 5 个 import 依赖，安卓侧均存在
+- 85 个文件中有 68 个是 `_` 开头的临时调试脚本（未同步到安卓，属正确行为）
+- `upload_refs.py` / `patch_webui_h3dual.py` / `inspect_embedded.py` 三个一次性
+  工具脚本没有 `if __name__ == "__main__"` 保护，import 时会执行真实上传。
+  不影响 webui 运行，但如果以后做自动扫描要注意。
+
+### 回归验证（v0.5.18）
+
+| 项 | 结果 |
+|---|---|
+| 启动 | 正常，6 脚本 / 31 参数 |
+| 余额 | `🪙 RH币 23590 · 账号通道`（session 通道） |
+| `apiKeyBlock` | `display: none` |
+| 隐藏脚本 | `reactor_swap` / `illustrious_t2i` 提交均 400 |
+| OpenAI zimage | 1024×1024 PNG，App 2112630365772128258，4 字段 |
+| OpenAI krea2 | 1024×1024 PNG，App 2113009215693500417，4 字段 |
+| OpenAI moss | 1024×1024 PNG，App 2114331355738923010，4 字段 |
+| 网页提交 | `zimage_i2i` → `T036_1793564439` → done |
+
+## 2026-11-02 · 暂隐两个未完成 App 改造的脚本
+
+- **新增 `HIDDEN_SCRIPTS = {"reactor_swap", "illustrious_t2i"}`**（`scripts/rh_webui.py`）
+  - `reactor_swap`：走 `/proxy/<key>/prompt`，与「断开 API Key 通道」直接冲突，无 session 等价接口
+  - `illustrious_t2i`：尚未完成 App 通道改造，从未跑过真实任务
+  - 代码、REGISTRY 配置、模块文件全部保留。从集合里删掉 key 即恢复。
+
+- **三道拦截**
+  1. `_visible_registry()` → `/api/scripts` 不再下发这两个 key
+  2. `/api/submit` → 返回 400「已暂停使用」
+  3. `_run_task` 开头兜底 → 覆盖 `/api/task/resubmit` 和启动时 stale 恢复两条隐蔽路径
+
+- **前端兜底过滤**（`webui.html` `init()`）
+  服务端不可达时会退回 `EMBEDDED_SCRIPTS` 离线常量，里面仍有这两个，
+  在 `init()` 里统一 `delete`，避免断网兜底时露出来。
+
+- 历史任务分组（`reactor_swap2`）保留不动，属于历史数据。
+
+验证：`/api/scripts` 返回 6 个脚本；两脚本提交均 400；
+历史 reactor 任务重跑被拦为 `failed`，未发起真实请求。
+
+## [0.5.24] - 2026-11-02
+### 新增
+- **MOSS 支持精确自定义分辨率**（此前只能输出固定比例下的 1440×1440）。
+### 原理（实测 2026-11-02）
+画布结构：
+```
+23 ResolutionSelector(width,height)
+   ├─ width  (link 7) → 6 EmptyFlux2LatentImage.width
+   └─ height (link 8) → 6 EmptyFlux2LatentImage.height
+```
+`6.width/height` 的输入**有连线**，App 发布时也没暴露这两个字段，
+但把它们写进 `nodeInfoList` 平台仍会采用，且**优先级高于 `23.aspect_ratio`**：
+| 测试 | 提交 | 实际输出 |
+|---|---|---|
+| C | `6.width=832, 6.height=1216`（ratio=1:1） | **832×1216** |
+| D | `ratio=9:16` + `6.width/height=1024/1024` | **1024×1024**（直传胜出） |
+| B | `23.megapixels=1`（ratio=1:1） | 1024×1024 |
+所以不必改工作流、不必重新发布 App，直接传 `6.width/height` 即可精确控制像素。
+### 改动
+- `rh_moss_app.build_node_info()` 新增 `width` / `height` 参数：
+  传了就写 `6.width/height`（新增 `add_raw()`，跳过暴露白名单校验），
+  不传则维持原有 `23.aspect_ratio` 逻辑。
+- `rh_moss_app.NODE` 新增 `"latent": "6"`。
+- `rh_moss_app.run()` 签名新增 `width` / `height`，日志区分「精确尺寸」和「比例折算」两种模式。
+- `rh_openai.MODEL_SPECS["moss"]`：`supports.width/height` 改为 True，
+  `needs_ratio` 改 False。`_run_via_app()` 调整为宽高优先、ratio 仅作后备。
+### 实测（走 OpenAI 接口，api_key 为空）
+```
+POST /v1/images/generations
+{"model":"moss","prompt":"...","size":"1024x1024","n":1,"steps":8}
+→ data[0].url = moss_zip_00006_hnrxq_1793563328.png
+```
+- 输出尺寸 **1024×1024** ✅
+- 提交字段：`4.text, 16.steps, 6.width, 6.height`
+- 日志：`[参数] 精确尺寸 1024×1024 | steps=8`
+### 说明
+- MOSS 的 `size` 现在与 zimage / krea2 行为一致，三个模型都支持精确像素。
+- `ratio` 参数仍保留：不传 size 而传 `ratio` 时走原枚举路径。
+- 注意：`6.width/height` 属于「隐性可用字段」——App 发布界面看不到，
+  平台若变更填充规则可能失效。失效时的表现是回退成比例默认值，
+  不会报错，需靠出图尺寸核对。
+
+## [0.5.23] - 2026-11-02
+### 新增
+- **OpenAI 兼容层支持 3 个模型**（全部走 App 通道，不需要 API Key）：
+
+  | model | App | 支持参数 | 别名 |
+  |---|---|---|---|
+  | `zimage`（默认） | 2112630365772128258 | size、steps | `zimage-t2i` / `zimage_t2i` |
+  | `krea2` | 2113009215693500417 | size、steps | `krea2-t2i` / `krea2_t2i` |
+  | `moss` | 2114331355738923010 | ratio（由 size 折算）、steps | `moss-t2i` / `moss_t2i` |
+
+  - `GET /v1/models` 会列出三个模型，`description` 里标注各自的 App 和可传参数。
+  - 模型名写错时，错误信息会列出全部可用模型。
+- **`size` → `aspect_ratio` 折算**（MOSS 专用）：MOSS 的 App 只暴露 8 档比例枚举，
+  没有数值宽高。新增 `size_to_ratio()` 按 |w/h − 候选比例| 取最接近的一档。
+  也可以直接在请求里传 `"ratio": "16:9 (Widescreen)"` 精确指定。
+### 修复
+- **`rh_openai._run_one` 没把 `steps` 传给 App**。App 的 `4.steps`（KSampler）
+  是暴露字段，之前漏传导致始终用默认值 6。现已接上，走 `extra["steps"]`。
+- `model` 参数现在贯穿 `generate → _run_sync/_worker → _run_one` 全链路。
+  之前只有 `generate` 校验机型，下游不知道目标模型。
+### 实测（api_key 为空 / 走账号通道）
+| 模型 | 请求 | 实际产物 | 提交字段 |
+|---|---|---|---|
+| zimage | 1024x1024 | 1024×1024 PNG | 5.text, 16.value, 17.value, 4.steps |
+| krea2 | 1024x1024 steps=10 | 1024×1024 PNG | 41.text, 39.value, 40.value, 36.steps |
+| moss | 1024x1024 | **1440×1440**（见下） | 4.text, 23.aspect_ratio, 16.steps |
+- 别名 `krea2-t2i` 正常归一。
+- 未知模型返回 400 + 可用列表。
+### 已知限制
+- **`seed` 全模型不支持**：三个 App 的 `inputNodes` 都没暴露 KSampler 的 seed，
+  传了会被忽略，无法复现同一张图。
+- **MOSS 输出尺寸不受 `size` 精确控制**：App 内 megapixels 锁定 2.0，
+  `1024x1024` 只用于折算比例，实际出 1440×1440。需要精确像素请用 zimage / krea2。
+- `illustrious` 未接入：该模块走 `/proxy` 工作流通道（需 API Key），与"断 key"目标冲突。
+- Krea2 的 3 组 LoRA 强度（28/29/30）可传但当前未在 OpenAI 接口暴露，
+  如需可后续加 `lora_*` 参数。
+
+## [0.5.22] - 2026-11-02
+### 变更
+- **OpenAI 兼容层（`/v1/*`）从 API Key 通道切换到 App 通道**。
+  新增开关 `OPENAI_USE_APP_CHANNEL = True`（`rh_openai.py`）。
+  - `True`  → `rh_zimage_app.run_t2i()`（App 2112630365772128258，账号/session）
+  - `False` → `rh_zimage_api.run()`（`/proxy` 通道，需 API Key，代码保留）
+- `_inject_key()` 加了 `API_CHANNEL_DISABLED` 判断：开关打开后不再从配置读 key，
+  避免绕过 `rh_webui` 的断开开关。
+### 修复
+- **App 通道直出 zip 导致 `/v1/images/generations` 返回不可用链接**。
+  新增 `_unzip_first_image()`：产物是 `.zip` 时解出第一张图再返回 URL，
+  符合 OpenAI 规范（原来会返回 `...zip`，第三方客户端无法渲染）。
+### 实测（api_key 清空状态下）
+- 调用 → `{"data":[{"url":"http://127.0.0.1:8770/v1/files/zimage_zip_00001_glnea_1793561394.png"}]}`
+- 下载：HTTP 200，1,002,875 B，PIL 校验 768×1368 RGB PNG。
+- 日志确认走 App：`[App] 2112630365772128258 (文生图) 提交 4 个字段`。
+- 说明：`/proxy` 通道产物文件名形如 `ComfyUI_xxxxx.png`，App 通道形如 `zimage_zip_xxxxx.png`，
+  可据此区分实际走的哪条路。
+### 已知差异（App 通道能力弱于原 /proxy 通道）
+- `seed` / `denoise` / `steps` 在该 App 未全部暴露，传入会被忽略。
+- `n>1` 由上层循环多次调用实现，行为不变。
+
+## [0.5.21] - 2026-11-02
+### 变更
+- **API Key 通道断开（只断开关联，代码全部保留）**。新增总开关 `API_CHANNEL_DISABLED = True`
+  （`rh_webui.py:52` 附近），把它改回 `False` 即恢复原行为。
+  - `_get_api_key()` 在断开时恒返回 `""`，等价于“从未配置”。
+  - `POST /api/settings` 收到 `api_key` 时**静默忽略**，不报错也不写入。
+  - `workflows/api_key.json` 里的旧值**不删除**，只是读不到，日后恢复可直接用。
+  - 前端 `#apiKeyBlock` 默认 `display:none`，顶栏不再显示「🔑已设/未设」。
+### 保持不变
+- `llm_api_key`（AI 润色）与 `openai`（OpenAI 兼容层）是**独立密钥**，未受影响。
+- 余额查询、任务提交、素材上传均走登录账号（session），与本开关无关。
+### 实测（开关为 True）
+- `/api/settings` → `api_key_set: False, masked: ''`。
+- 尝试写入测试 key → 返回 `{"ok": true}`，但再读仍为 `False`，磁盘旧值仍为 32 位。
+- 图生图真实任务：taskId `2116969503372169218`，产物 `krea2_zip_00001_lzajk_1793559868.png`，status `done`。
+- 启动日志只有「通道: 账号（session，已接管 21 处请求）」，无 key 提示。
+- 页面：`verInfo` 无钥匙徽标，`apiKeyBlock` = `display:none`，余额「🪙 RH币 23569 · 账号通道」，0 报错。
+- 副本 md5 一致（webui.html ×3、rh_webui.py ×2）。
+
+## [0.5.20] - 2026-11-02
+### 修复
+- **视频任务的源视频上传漏包（严重）**：`_make_upload_shim` 只覆盖了 `upload_image`，
+  而 `rh_wan22` 的 `upload_video` → `upload_media(p, "video")` 没被覆盖，
+  仍会把 `apiKey` 写进 multipart body。断掉 API Key 后表现为
+  `HTTPError: HTTP Error 400`（参考图上传成功、视频上传失败）。
+  - 挂载点从单个 `upload_image` 扩展为 `("upload_image", "upload_video", "upload_media")`。
+  - shim 内部改调 `rh_session_channel.upload_media()`（新增），
+    兼容 `upload_media(path, file_type)` 的位置参数。
+- **新增 `rh_session_channel.upload_media()`**：通用素材上传，
+  content-type 按扩展名推断（`.mp4`→`video/mp4`，`.mov`→`video/quicktime` 等），
+  避免视频被当 `octet-stream` 上传。
+### 实测（api_key 清空状态下，三个视频脚本全通）
+| 脚本 | taskId | 产物 | 校验 |
+|---|---|---|---|
+| `h3_flf_video` 首帧 | 2116941707010732034 | `clean_zip_00001_cycqz_1793553275.zip` | h264 480×864 + aac，5.17s |
+| `h3_omni_video` 双参考 | 2116960030821801986 | `clean_zip_00001_tbkjo_1793557708.zip` | h264 480×864 + aac，5.17s |
+| `wan22_animate` 动作迁移 | 2116961011311661058 | `wan_zip_00001_kzybu_1793558139.mp4` | h264 480×832 + aac，4.71s |
+- 首帧/双参考的参考图均走 session 上传，日志可见 `first.png → 687f378d...png`
+  （裸 md5 文件名，非 `api/xxx.png`），证明确实走账号通道。
+- Wan 的源视频走 session 上传后提交成功，产物为可直接播放的 mp4。
+### 已知限制
+- **`reactor_swap`（ReActor 换脸）仍走 API Key**：其 `_req` 命中
+  `/proxy/<key>/prompt`，是 API Key 专属通道，无 session 等价接口。
+  断 key 后报 `RuntimeError: 未设置 API Key`。尚未改造为 App 通道，暂时跳过。
+
+## [0.5.19] - 2026-11-02
+### 变更
+- **webui 全链路切换为登录账号（session）通道，API Key 不再使用**。
+### 新增
+- **余额查询改走账号**：`GET /api/balance` → `POST /uc/point/summary`
+  （鉴权 `Authorization: <Rh-Accesstoken>`，裸 token 无 Bearer）。
+  - 字段坑：`billingVersion=OLD` 时真实余额在 `transitionCoinRemained`，
+    `balancePoint`/`paidPoint`/`bonusPoint` 全为 0。后端已做择优，
+    同时保留 `remain_coins`（兼容旧前端）与 `balance_point`。
+  - 与原 API Key 版（`/uc/openapi/accountStatus`）是**两套独立账本**：
+    实测账号通道 23,694，API Key 通道 5,137（分属主号与测试号）。
+- **参考图上传改走账号**：新增 `_make_upload_shim()`，包装各模块的 `upload_image`。
+  - 原实现把 `apiKey` 硬编码进 multipart body，走 `/task/openapi/upload`，
+    停用 API Key 后图生图/首帧/动作迁移全挂。
+  - 新链路走 `rh_session_channel.upload_image()` 的 `/upload/image`（三件套认证：
+    `Authorization` + `Rh-Identify` + `Rh-Comfy-Auth`），返回裸文件名。
+  - 实测：裸文件名直填 `LoadImage.image` 可被 App 接受（真实图生图任务已出图）。
+### 修复
+- **`_inject_api_key()` 在 key 为空时提前 return，导致 session shim 装不上**。
+  这是切换账号后最致命的隐藏依赖：key 一空，提交/查产物/上传的 shim 全部不生效，
+  业务链会静默退回到需要 API Key 的老路径。已改为无论 key 是否为空都继续装 shim。
+### 移除
+- 删除死代码 `_rh_web()`（市场删除后已无调用点）。
+### 验证（api_key 清空状态下实测）
+- 余额：`remain_coins: 23679`，`channel: session`。
+- 图生图全链路：session 上传 → 提交 → 出图 → 解包 png，
+  taskId `2116939922485370881`，产物 `krea2_zip_00003_tteqk_1793552792.png`。
+- 页面：15 任务 / 7 缩略图 / 0 破图，余额栏显示「🪙 RH币 23676 · 账号通道」。
+- 三份 `webui.html` 与 `android/.../rh_webui.py` 副本 md5 一致。
+### 注意
+- `api_key` 配置项保留但不再使用（启动时会打印提示）。
+- 历史遗留的 `/proxy` 通道 pid 在无 key 时无法查询，已改为明确报错而非静默失败。
+- 视频类脚本（H3/ReActor/Wan）本次未跑真实任务，但走同一套 shim 路径。
+
+## [0.5.18] - 2026-11-01
+### 移除
+- **应用市场功能整体删除**（已不需要）。涉及三层：
+  - 后端删除 4 个函数：`_market_list` / `_market_tags` / `_market_detail` / `_market_submit`
+    及 `_MK_DETAIL_CACHE`（共 5153 字节）。
+  - 后端删除 4 条路由：`GET /api/market`、`GET /api/market/tags`、
+    `GET /api/market/detail`、`POST /api/market/submit`（共 1569 字节）。
+  - 前端删除：顶栏「🛒 应用市场」按钮、`#marketMask` / `#marketPanel` 面板（含
+    `#marketBody`）、对应 CSS 两条、以及整段 JS（`toggleMarket` / `loadMarket` /
+    `renderMarketList` / `openMarketDetail` / `renderMarketDetail` / `submitMarketApp`
+    与 `MK_*` 状态变量，共 179 行）。
+- 三份 `webui.html` 副本与 `android/app/src/main/python/rh_webui.py` 已同步。
+### 验证
+- 市场端点全部 404：`/api/market`、`/api/market/tags`、`/api/market/detail`。
+- 其余端点正常 200：`/`、`/api/scripts`、`/api/tasks`、`/api/balance`、`/api/refs`、`/api/settings`。
+- 页面无 JS 报错；`toggleMarket` / `loadMarket` 均为 undefined（已彻底移除）。
+- 顶栏无市场按钮、DOM 无 `#marketPanel`；8 个脚本、13 个历史任务、5 张缩略图、0 张破图。
+- 全仓 grep `market|应用市场|MK_PAGE|_market_` 零命中。
+- `rh_webui.py` 语法校验通过。
+### 未动
+- 鉴权白名单 `allowed` 本就不含市场端点，无需改。
+- `_rh_web` / `_query_balance` 保留 —— 它们还被余额查询等功能使用。
+
+## [0.5.17] - 2026-11-01
+### 新增
+- **zip 产物自动解包**。krea2 / zimage 等图片工作流改成 `CompressImages` 只出 zip 后
+  （为了绕开平台下载管道加的水印和 AIGC 标记），webui 前端仍按图片渲染 zip，
+  任务卡片和预览弹窗全是破图。现在在落盘层统一解包，前端拿到的仍是 png。
+  - 新增 `rh_webui._unpack_zip_outputs()`，6 处调用点覆盖全部落盘路径：
+    `krea2` / `zimage_i2i` / `moss_t2i` / `illustrious_t2i` 四个提交分支、
+    `wan22_animate`（视频+zip 混合）、`_download_from_entry`（续跑/轮询路径）。
+### 关键设计
+- **必须重命名，不能直接用 zip 内成员名**。`CompressImages` 打包出来的成员名固定是
+  `image_00000.png`，直接解压会让所有任务的产物互相覆盖。
+  改为按 zip 主名重命名：`krea2_zip_00001_lisnc_1793483298.zip`
+  → `krea2_zip_00001_lisnc_1793483298.png`。多成员时追加序号 `_00/_01`。
+- **保留原 zip 文件**，但不放进返回列表。用户仍可在产物目录取原件（无水印版），
+  前端也不会再把 zip 当图片渲染。
+- **解包失败不判死任务**：原 zip 保留并返回，至少能手动下载。
+- **22 字节空包**（`PK\x05\x06` + 18 个 0）回退保留 zip，让异常可见，不静默当成功。
+- `wan22_animate` 解包后仍优先用 mp4 当封面，不会被 png 抢走。
+### 验证
+- 单元：两个 zip 同时解 → 各自独立文件名，无覆盖；混入 mp4 → 顺序保留；
+  不存在的 zip → 返回空；22 字节空包 → 回退保留 zip。
+- 产物有效性：解出的 png 能被 PIL 正常打开（1080×1920 / 768×1368 RGB），`im.info` 为空。
+- 端到端：krea2 文生图实跑，产物 `krea2_zip_00001_buhnp_1793483978.zip`
+  → 解包为 `krea2_zip_00001_buhnp_1793483978.png`，文件存在且可打开。
+### 修复
+- **版本号长期未同步**。`webui.html` 的 `<title>` / `<h1>` / `<meta name="version">`
+  和 `android/app/build.gradle` 都停在 `0.5.15`，而 CHANGELOG 已记到 `0.5.17`
+  （0.5.16 / 0.5.17 只改了 CHANGELOG 没升版本号）。三处统一到 `0.5.17`，
+  `versionCode 28 -> 30`。三份 `webui.html` 副本同步。
+- **`meta[name=version]` 多写了一个 v**，导致页头显示 `vv0.5.15`。
+  改为不带前缀（`content="0.5.17"`），由 JS 拼 `v`。
+
+## [0.5.16] - 2026-11-01
+### 移除
+- **webui 移除 Zimage 图生图功能**，该入口现在只能文生图。
+  根因：图生图 App `2112645746440085506` 已从平台下线，
+  `/api/webapp/detail` 返回 `901 WEBAPP_NOT_EXISTS`，这个入口提交必失败。
+  - `REGISTRY["zimage_i2i"]`：删掉 `ref_image` / `denoise` / `lora_a` / `lora_b` 四个参数，
+    `mode` 由 `i2i` 改为 `t2i`，名称改为「Zimage 文生图 (T2I · App)」。
+  - 提交分支改调 `mod.run_t2i()`，不再走 `mod.run()` 的自动分流。
+  - 历史任务若带 `ref_image` 重跑，直接抛错并提示改用 Krea2 ——
+    不静默忽略，否则用户会以为参考图生效了。
+  - `rh_zimage_app.run()` / `run_i2i()` 改为快速失败，不再发请求等 901。
+### 保留
+- **REGISTRY key 仍叫 `zimage_i2i`，不重命名**。历史任务的 `params` 里存的是这个 key，
+  `rerunTask()` 靠它找回脚本，改 key 会让所有旧任务重跑失败。
+- 文生图能力不变：App `2112630365772128258`，分辨率 / 步数 / 种子。
+### 验证
+- 注册表与三份 `webui.html` 的 `EMBEDDED_SCRIPTS` 离线兜底表参数项一致（`resolution/steps/seed`）。
+- `run()` / `run_i2i()` 传 `ref_image_path` 均抛 `RuntimeError`。
+- 文生图实跑通过：taskId `2116649873155907586`，产物 `zimage_zip_00001_zobcd_1793483667.zip`。
+### 相关
+- 同一轮另将 krea2 文生图工作流 `2112996948134440962` 改为只出 zip（V3 → V4），
+  详见 `skills/runninghub-zip-no-watermark/SKILL.md` 7.4c2。
+
 ## [0.5.15] - 2026-10-30
 ### 变更
 - **H3 首尾帧脚本整体替换为 App 版**（`rh_h3_flf_api.py` 重写，约 456 行）。

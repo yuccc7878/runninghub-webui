@@ -419,8 +419,12 @@ def run_i2i(prompt_text, ref_image_path, width=DEFAULT_W, height=DEFAULT_H,
 
     只换一个位子时，另一个位子传 "" 可关闭该 LoRA。
     """
-    if not ref_image_path:
-        raise ValueError("图生图需要 ref_image_path")
+    # 图生图 App 2112645746440085506 已从平台下线（/api/webapp/detail
+    # 返回 901 WEBAPP_NOT_EXISTS）。这里快速失败并给出替代方案，
+    # 不要让调用方等到 poll 超时才明白。
+    raise RuntimeError(
+        "zimage 图生图已移除：App 2112645746440085506 已下线。"
+        "请改用 Krea2 图生图（rh_krea2_app.run_i2i，App 2113025166677749762）。")
     return _do_run(APP_I2I, "图生图", prompt_text, width, height, steps, denoise,
                    ref_image_path, download_dir, on_submit, verbose,
                    lora_name=lora_name, lora_strength=lora_strength,
@@ -429,32 +433,24 @@ def run_i2i(prompt_text, ref_image_path, width=DEFAULT_W, height=DEFAULT_H,
 
 def run(prompt_text, ref_image_path=None, width=DEFAULT_W, height=DEFAULT_H,
         steps=None, denoise=None, download_dir="outputs",
-        on_submit=None, verbose=True,
-        lora_name=None, lora_strength=None,
-        lora_name_b=None, lora_strength_b=None, **_ignored):
+        on_submit=None, verbose=True, **_ignored):
     """
-    统一入口（兼容 rh_webui 旧调用签名）：
-      有 ref_image_path → 图生图（支持 LoRA 运行时替换）
-      无 ref_image_path → 文生图（无 LoRA 节点，相关参数忽略）
+    统一入口。现在只支持文生图——传 ref_image_path 会抛错。
 
-    lora / lora_strength 旧参数名仍被接受（走 **_ignored），
-    但实际请用 lora_name / lora_strength。
+    历史说明：以前 ref_image_path 非空就走图生图 App，但那个 App
+    （2112645746440085506）已从平台下线，所以改为显式拒绝，
+    而不是让调用方拿到一个 901 WEBAPP_NOT_EXISTS。
+    需要图生图请改用 Krea2：rh_krea2_app.run_i2i()。
     """
     if ref_image_path:
-        return run_i2i(
-            prompt_text, ref_image_path, width=width, height=height,
-            steps=steps if steps is not None else DEFAULT_STEPS,
-            denoise=denoise if denoise is not None else DEFAULT_DENOISE,
-            download_dir=download_dir, on_submit=on_submit, verbose=verbose,
-            lora_name=lora_name, lora_strength=lora_strength,
-            lora_name_b=lora_name_b, lora_strength_b=lora_strength_b,
-        )
+        raise RuntimeError(
+            "zimage 图生图已移除：App 2112645746440085506 已下线。"
+            "请改用 Krea2 图生图（rh_krea2_app.run_i2i，App 2113025166677749762）。")
     return run_t2i(
         prompt_text, width=width, height=height,
         steps=steps if steps is not None else DEFAULT_STEPS,
         download_dir=download_dir, on_submit=on_submit, verbose=verbose,
     )
-
 
 # ==================== 自检 ====================
 IS_APP_CHANNEL = True      # 通知 rh_webui：pid 是 App taskId，不是 /proxy 的 prompt_id

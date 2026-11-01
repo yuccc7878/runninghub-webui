@@ -537,6 +537,45 @@ def query_outputs(task_id, webapp_id=None, timeout=30):
         "costTime": rec.get("taskCostTime"),
         "createTime": rec.get("createTime"),
         "outputs": outs,
+        # 失败原因：session 端放在 taskResultDesc（JSON 字符串）里，
+        # 字段名与 openapi 的 failedReason 对齐，供各业务模块直接消费
+        "failedReason": _parse_fail_reason(rec) if st == "FAILED" else None,
+    }
+
+
+def _parse_fail_reason(rec):
+    """把 taskResultDesc 解析成 openapi 风格的 failedReason。
+
+    session 端结构（实测）：
+        {"node_name": "WanVideoAnimateEmbeds", "exception_type": "RuntimeError",
+         "traceback": "[\"File \\\"...\\\", line N, in fn\", ...]", "current_inputs": "{}", ...}
+    openapi 端 traceback 是 list，这里统一转成 list，让业务模块单一分支处理。
+    """
+    if not rec:
+        return None
+    raw = rec.get("taskResultDesc")
+    data = {}
+    if isinstance(raw, str) and raw.strip():
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data = {"traceback": raw}
+    elif isinstance(raw, dict):
+        data = raw
+    tb = data.get("traceback")
+    if isinstance(tb, str):
+        try:
+            parsed = json.loads(tb)
+            tb = parsed if isinstance(parsed, list) else [tb]
+        except Exception:
+            tb = [tb]
+    elif tb is None:
+        tb = []
+    return {
+        "node_name": data.get("node_name"),
+        "exception_type": data.get("exception_type"),
+        "traceback": tb,
+        "msg": data.get("msg") or data.get("error") or rec.get("taskResultDesc"),
     }
 
 
@@ -569,6 +608,61 @@ def estimate_price(webapp_id, node_info_list, timeout=30):
     if d.get("code") == 0:
         return {"ok": True, "data": d.get("data"), "userId": uid}
     return {"ok": False, "error": "code=%s msg=%s" % (d.get("code"), d.get("msg")), "data": None}
+
+
+def upload_media(filepath, file_type="image", timeout=300):
+    """通用素材上传（图片/视频），走 /upload/image + 三件套认证。
+
+    实测 2026-11-02：同一个 /upload/image 端点也能接受 mp4
+    （Content-Type: video/mp4），返回 .mp4 文件名，可直填 video 字段。
+
+    与 upload_image 的区别仅是宽容度：保留原扩展名，content-type 按扩展名推断，
+    避免 .mp4 被当成 octet-stream 传上去。
+    返回 {ok, name, subfolder, type}
+    """
+    s = get_session()
+    if not s["token"]:
+        return {"ok": False, "error": "未配置会话"}
+    p = Path(filepath)
+    if not p.exists():
+        return {"ok": False, "error": "文件不存在: %s" % filepath}
+
+    suffix = p.suffix.lower()
+    ctype = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".webm": "video/webm",
+    }.get(suffix, "application/octet-stream")
+
+    boundary = "----RhForm" + str(int(time.time() * 1000))
+    body = b""
+    body += ("--" + boundary + "\r\n").encode()
+    body += ('Content-Disposition: form-data; name="image"; filename="%s"\r\n' % p.name).encode()
+    body += ("Content-Type: %s\r\n\r\n" % ctype).encode()
+    body += p.read_bytes()
+    body += ("\r\n--" + boundary + "--\r\n").encode()
+
+    req = urllib.request.Request(BASE + "/upload/image", data=body, method="POST")
+    req.add_header("Content-Type", "multipart/form-data; boundary=" + boundary)
+    req.add_header("Authorization", s["token"])
+    req.add_header("Rh-Identify", s["identify"])
+    req.add_header("Rh-Comfy-Auth", s["comfy"])
+    try:
+        txt = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "replace")
+        d = json.loads(txt)
+        if d.get("name"):
+            return {"ok": True, "name": d.get("name"),
+                    "subfolder": d.get("subfolder"), "type": d.get("type")}
+        return {"ok": False, "error": json.dumps(d, ensure_ascii=False)[:300]}
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "error": "HTTP %s" % e.code}
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, e)}
 
 
 def upload_image(filepath, timeout=120):

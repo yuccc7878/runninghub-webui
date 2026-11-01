@@ -49,178 +49,94 @@ def _save_config(cfg):
         pass
 
 
+# ===== API Key 通道总开关 =====
+# False = 保持原行为（可填可用）；True = 彻底断开（恒返回空，入口隐藏，写入静默忽略）
+#
+# 断开的目的是全链路只走登录账号（session）。改成 False 即可恢复，
+# api_key.json 里的旧值不会被删除，只是读不到。
+API_CHANNEL_DISABLED = True
+
+
+# ===== 暂不可用脚本（界面隐藏 + 提交拦截，代码全保留）=====
+# reactor_swap    : 走 /proxy/<key>/prompt，与「断开 API Key 通道」冲突，无 session 等价接口
+# illustrious_t2i : 未完成 App 通道改造，未实测，暂不对外
+#
+# 从集合里删掉 key 即恢复显示。REGISTRY 本身不动，历史任务的 rerun / 状态轮询仍能找回脚本。
+HIDDEN_SCRIPTS = {"reactor_swap", "illustrious_t2i"}
+
+
+def _visible_registry():
+    """对外暴露的脚本表：剔除 HIDDEN_SCRIPTS。"""
+    return {k: v for k, v in REGISTRY.items() if k not in HIDDEN_SCRIPTS}
+
+
 def _get_api_key():
+    """读 API Key。通道断开时恒返回空串，等价于“从未配置”。
+
+    返回空的影响面（均已适配）：
+      - _inject_api_key 不再向模块注入 key，模块 API_KEY 保持 ""
+      - _query_balance 走会话通道，不依赖此值
+      - upload_image / upload_video 由 session shim 接管
+      - 历史 /proxy 通道 pid 无法查询，会明确报错而非静默失败
+    """
+    if API_CHANNEL_DISABLED:
+        return ""
     return (_load_config().get("api_key") or "").strip()
 
 
 def _query_balance():
-    """查询 RunningHub 账户余额/点数（POST /uc/openapi/accountStatus）"""
-    key = _get_api_key()
-    if not key:
-        return {"ok": False, "error": "未配置 API Key"}
-    import urllib.request
-    req = urllib.request.Request(
-        "https://www.runninghub.ai/uc/openapi/accountStatus",
-        data=json.dumps({"apikey": key}).encode(),
-        method="POST",
-        headers={"Authorization": key, "Content-Type": "application/json"},
-    )
+    """查询余额 —— 走登录账号（会话通道），不碰 API Key。
+
+    端点：POST /uc/point/summary
+    鉴权：Authorization: <Rh-Accesstoken>（裸 token，不加 Bearer）
+
+    字段说明（实测 2026-11-02）：
+      billingVersion=OLD 时，真实余额在 transitionCoinRemained；
+      balancePoint / paidPoint / bonusPoint 都是新计费体系的，旧账号全为 0。
+      两个都返回，前端优先用 remain_coins，为 0/None 时回退 balance_point。
+    """
     try:
-        r = json.loads(urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="replace"))
-        if r.get("code") == 0:
-            d = r.get("data") or {}
-            return {"ok": True, "remain_coins": d.get("remainCoins"), "task_counts": d.get("currentTaskCounts"),
-                    "remain_money": d.get("remainMoney"), "currency": d.get("currency"), "api_type": d.get("apiType")}
-        return {"ok": False, "error": f"RunningHub 返回错误: {r.get('msg') or r.get('errorMessage')}"}
+        import rh_session_channel as SC
     except Exception as e:
-        return {"ok": False, "error": f"查询失败: {e}"}
+        return {"ok": False, "error": "会话模块不可用: %s" % e}
 
+    if not SC.is_configured():
+        return {"ok": False, "error": "未登录（需要网页会话）", "need_login": True,
+                "channel": "session"}
 
-def _rh_web(method, path, body=None, timeout=15):
-    """调 RunningHub 网页端接口（国际站 .ai，Bearer 鉴权）。返回 dict。"""
-    import urllib.request
-    import urllib.error
-    key = _get_api_key()
-    if not key:
-        return {"ok": False, "error": "未配置 API Key"}
-    req = urllib.request.Request("https://www.runninghub.ai" + path, method=method)
-    req.add_header("Authorization", "Bearer " + key)
-    req.add_header("Content-Type", "application/json")
-    if body is not None:
-        req.data = json.dumps(body).encode()
+    ok, r = SC.raw_post("/uc/point/summary", {})
+    if not ok:
+        return {"ok": False, "error": "查询失败: %s" % (r.get("msg") or r), "channel": "session"}
+    if r.get("code") != 0:
+        msg = r.get("msg") or r.get("errorMessages") or "未知错误"
+        if r.get("code") in (401, 403):
+            return {"ok": False, "error": "会话已失效，请重新登录: %s" % msg,
+                    "need_login": True, "channel": "session"}
+        return {"ok": False, "error": "查询失败: %s" % msg, "channel": "session"}
+
+    d = r.get("data") or {}
+    # 旧计费体系余额在老字段，新体系在 balancePoint；取有效的那个
+    trans = d.get("transitionCoinRemained")
+    point = d.get("balancePoint") or 0
+    remain = trans if trans not in (None, "") else point
     try:
-        r = json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", errors="replace"))
-        if r.get("code") == 0:
-            return {"ok": True, "data": r.get("data")}
-        return {"ok": False, "error": f"RunningHub 返回错误: {r.get('msg') or r.get('errorMessage')}"}
-    except urllib.error.HTTPError as e:
-        try:
-            msg = json.loads(e.read().decode("utf-8", errors="replace")).get("msg") or str(e.code)
-        except Exception:
-            msg = f"HTTP {e.code}"
-        return {"ok": False, "error": msg}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-def _market_list(page=1, size=12, tag=None, keyword=None, sort=None):
-    """应用市场列表。"""
-    body = {"size": size, "current": page}
-    if tag:
-        body["tags"] = [tag]
-    if sort:
-        body["sort"] = sort
-    if keyword:
-        # RunningHub /api/webapp/list 的搜索字段名是 search（实测 extra.keyword 等均无效）
-        body["search"] = keyword
-    r = _rh_web("POST", "/api/webapp/list", body, timeout=20)
-    if not r["ok"]:
-        return r
-    d = r["data"] or {}
-    records = []
-    for it in (d.get("records") or []):
-        cov = (it.get("covers") or [{}])[0].get("url") or (it.get("preview") or {}).get("url") or ""
-        records.append({
-            "id": it.get("id"), "name": it.get("name"),
-            "intro": it.get("intro") or "",
-            "cover": cov,
-            "tags": [t.get("name") for t in (it.get("tags") or [])][:3],
-            "use_count": (it.get("statisticsInfo") or {}).get("useCount"),
-            "owner": (it.get("owner") or {}).get("name") or "",
-            "liked": it.get("liked"),
-        })
-    return {"ok": True, "records": records, "total": d.get("total"), "pages": d.get("pages"), "current": d.get("current")}
-
-
-def _market_tags():
-    """分类树。"""
-    r = _rh_web("POST", "/api/portal/tag/tree", {"rang": "WEBAPP"}, timeout=15)
-    if not r["ok"]:
-        return r
-    return {"ok": True, "tags": [{"id": t.get("id"), "name": t.get("name")} for t in (r["data"] or [])]}
-
-
-_MK_DETAIL_CACHE = {}  # webapp_id -> (timestamp, detail)
-
-
-def _market_detail(webapp_id):
-    """应用详情：输入节点 + curl 示例。带 5 分钟内存缓存（外部接口不稳定）。"""
-    now = time.time()
-    cached = _MK_DETAIL_CACHE.get(webapp_id)
-    if cached and now - cached[0] < 300:
-        return {"ok": True, "detail": cached[1]}
-    r = _rh_web("POST", "/api/webapp/detail", {"webappId": webapp_id}, timeout=10)
-    if not r["ok"]:
-        return r
-    d = r["data"] or {}
-    nodes = []
-    for n in (d.get("inputNodes") or []):
-        ft = n.get("fieldType") or "STRING"
-        if ft in ("IMAGE", "AUDIO", "VIDEO", "ZIP"):
-            nodes.append({"k": n.get("fieldName"), "label": n.get("nodeName") + " · " + n.get("fieldName"),
-                          "type": "ref", "def": "", "help": n.get("description") or "",
-                          "fieldType": ft, "nodeId": n.get("nodeId")})
-        elif ft == "LIST":
-            nodes.append({"k": n.get("fieldName"), "label": n.get("nodeName") + " · " + n.get("fieldName"),
-                          "type": "select", "options": n.get("fieldValue") or "", "def": n.get("fieldValue") or "",
-                          "help": n.get("description") or "", "fieldType": ft, "nodeId": n.get("nodeId")})
-        else:
-            nodes.append({"k": n.get("fieldName"), "label": n.get("nodeName") + " · " + n.get("fieldName"),
-                          "type": "text", "def": n.get("fieldValue") or "", "help": n.get("description") or "",
-                          "fieldType": ft, "nodeId": n.get("nodeId")})
-    detail = {
-        "id": d.get("id"), "name": d.get("name"),
-        "desc": (d.get("description") or "").replace("<p>", "").replace("</p>", "\n"),
-        "nodes": nodes, "curl": d.get("curl") or "",
-        "owner": (d.get("owner") or {}).get("name") or "",
-        "use_count": (d.get("statisticsInfo") or {}).get("useCount"),
-        "instance_type": d.get("instanceType") or "default",
-        "covers": [c.get("url") for c in (d.get("covers") or [])],
+        remain_num = float(remain)
+    except (TypeError, ValueError):
+        remain_num = None
+    return {
+        "ok": True,
+        "channel": "session",
+        "billing_version": d.get("billingVersion"),
+        "remain_coins": remain,                    # 兼容旧前端字段名
+        "remain_coins_num": remain_num,
+        "balance_point": point,
+        "paid_point": d.get("paidPoint"),
+        "bonus_point": d.get("bonusPoint"),
+        "activity_point": d.get("activityPoint"),
+        "month_consume_point": d.get("monthConsumePoint"),
+        "nearest_expire": d.get("nearestExpireTime"),
+        "buckets": d.get("buckets") or [],
     }
-    _MK_DETAIL_CACHE[webapp_id] = (now, detail)
-    return {"ok": True, "detail": detail}
-
-
-def _market_submit(webapp_id, node_values, webhook=None, instance_type="default"):
-    """用 nodeInfoList 提交市场应用任务。node_values: {fieldName: value}"""
-    key = _get_api_key()
-    if not key:
-        return {"ok": False, "error": "未配置 API Key"}
-    # 先拿详情里的原始 inputNodes（含 fieldData/description 元数据）
-    d = _market_detail(webapp_id)
-    if not d["ok"]:
-        return d
-    raw_nodes = (d["detail"]["nodes"] or [])
-    # 组装 nodeInfoList；ref 类型（本地素材/产物）先上传换云端文件名
-    node_list = []
-    for n in raw_nodes:
-        val = node_values.get(n["k"])
-        if val is None or val == "":
-            continue
-        if n["type"] == "ref":
-            fp = _resolve_ref_path(val)
-            if not fp:
-                return {"ok": False, "error": f"参考文件不存在: {val}"}
-            try:
-                import rh_zimage_api as R
-                _inject_api_key(R)  # 注入 key，否则上传鉴权失败
-                up = R.upload_image(fp)
-            except Exception as e:
-                return {"ok": False, "error": f"上传参考文件失败: {e}"}
-            val = up
-        entry = {"nodeId": n.get("nodeId"), "fieldName": n["k"], "fieldValue": val}
-        node_list.append(entry)
-    body = {"webappId": webapp_id, "apiKey": key, "nodeInfoList": node_list}
-    if webhook:
-        body["webhookUrl"] = webhook
-    if instance_type:
-        body["instanceType"] = instance_type
-    r = _rh_web("POST", "/task/openapi/ai-app/run", body, timeout=30)
-    if not r["ok"]:
-        return r
-    d2 = r["data"] or {}
-    return {"ok": True, "task_id": d2.get("taskId"), "task_status": d2.get("taskStatus"),
-            "client_id": d2.get("clientId"), "prompt_tips": d2.get("promptTips")}
 
 
 def _get_llm_cfg():
@@ -334,7 +250,7 @@ def _restart_backend():
 # 更新检测（v0.5.1）：GitHub 最新 Release vs 当前版本
 # 免 API 方案：latest 重定向 → 解析 tag，绕开 GitHub API 限流(60次/h)
 # ============================================================
-CUR_VERSION = "0.5.15"          # 当前版本号（build.gradle versionName）
+CUR_VERSION = "0.5.18"          # 当前版本号（build.gradle versionName）
 _UPDATE_CACHE = {"ts": 0, "data": None}   # 15 分钟缓存，避免频繁打外网
 
 def _version_tuple(v):
@@ -428,10 +344,13 @@ def _polish_prompt(prompt_text, kind, llm):
 
 
 def _inject_api_key(mod):
-    """把已配置的 RunningHub API Key 注入底层脚本模块（一次性注入所有模块，防漏）"""
+    """把配置注入底层脚本模块，并确保 session 通道已挂上。
+
+    ⚠️ 已改为账号通道优先：API Key 现在是可选的后备项。
+    即使 key 为空也必须继续往下走，否则 _install_session_channel 不会被调用，
+    提交/查产物/上传的 shim 就都装不上 —— 整个业务链会退回到需要的 API Key 的老路径。
+    """
     key = _get_api_key()
-    if not key:
-        return False
     mods = [mod]
     # 无论传哪个模块，都把所有底层脚本模块一起注入，避免跨模块调用漏注入
     for mname in ("rh_zimage_app", "rh_zimage_api", "rh_krea2_app", "rh_krea2_nsfw", "rh_h3_flf_api", "rh_h3_dual_app", "rh_workflow_api", "rh_wan22", "rh_reactor", "rh_illustrious_api", "rh_moss_app"):
@@ -443,11 +362,11 @@ def _inject_api_key(mod):
             pass
     for m in mods:
         try:
-            if hasattr(m, "API_KEY"):
+            if key and hasattr(m, "API_KEY"):
                 m.API_KEY = key
-            if hasattr(m, "API_KEY_BACKUP"):
+            if key and hasattr(m, "API_KEY_BACKUP"):
                 m.API_KEY_BACKUP = key
-            if hasattr(m, "PROXY"):
+            if key and hasattr(m, "PROXY"):
                 m.PROXY = f"{m.BASE}/proxy/{key}" if hasattr(m, "BASE") else f"https://www.runninghub.ai/proxy/{key}"
         except Exception:
             pass
@@ -456,7 +375,7 @@ def _inject_api_key(mod):
         _install_session_channel()
     except Exception:
         pass
-    return True
+    return bool(key)
 
 
 # ==================== session 通道接管 ====================
@@ -517,7 +436,8 @@ def _session_translate(path, body):
             return True, {"code": 0, "msg": "success", "data": outs}
         if st == "FAILED":
             return True, {"code": 805, "msg": "任务失败",
-                          "data": {"taskId": tid, "taskStatus": r.get("rawStatus")}}
+                          "data": {"taskId": tid, "taskStatus": r.get("rawStatus"),
+                                   "failedReason": r.get("failedReason")}}
         # RUNNING / 列表未同步
         return True, {"code": code if code in (804, 813) else 813,
                       "msg": "running" if not r.get("pending") else "列表同步中",
@@ -598,6 +518,47 @@ def _make_request_shim(orig, style):
     return _shim
 
 
+def _make_upload_shim(orig):
+    """包装模块的 upload_image(path) -> 优先走 session 通道。
+
+    背景：各业务模块的 upload_image 是把 API_KEY 硬编码进 multipart body
+    （字段名 apiKey），走 /task/openapi/upload。一旦停用 API Key 就全挂，
+    而参考图上传是图生图/首帧/动作迁移的必经步骤。
+
+    session 通道的 /upload/image 用三件套认证（Authorization + Rh-Identify +
+    Rh-Comfy-Auth），不依赖 API Key。实测 2026-11-02：上传返回裸文件名，
+    直接填进 LoadImage.image 即可被 App 接受（已用真实图生图任务验证出图）。
+
+    返回格式对齐原函数：原函数返回 fileName 字符串（形如 api/xxx.png），
+    这里返回 session 的裸文件名（形如 <md5>.png），两者都能被 LoadImage 解析。
+    """
+    if getattr(orig, _SESSION_SHIM_MARK, False):
+        return orig
+
+    def _upload_image(file_path, *a, **kw):
+        # 兼容 upload_media(path, file_type) 的第二个位置参数
+        file_type = kw.get("file_type")
+        if file_type is None and a:
+            file_type = a[0]
+        try:
+            import rh_session_channel as SC
+            if SC.is_configured():
+                r = SC.upload_media(str(file_path), file_type or "image")
+                if r.get("ok") and r.get("name"):
+                    return r["name"]
+                # session 明确失败：不静默回退到 API Key（已停用），直接报错
+                raise RuntimeError("素材上传失败(session): %s" % r.get("error"))
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError("素材上传失败(session): %s: %s" % (type(e).__name__, e))
+        # 未配置会话时才退回原实现
+        return orig(file_path, *a, **kw)
+
+    setattr(_upload_image, _SESSION_SHIM_MARK, True)
+    return _upload_image
+
+
 def _install_session_channel():
     """给所有业务模块装 session 通道 shim。幂等，可重复调用。
 
@@ -626,6 +587,10 @@ def _install_session_channel():
             if hasattr(m, "_request"):
                 m._request = _make_request_shim(m._request, "url_method")
                 n += 1
+            for _fn in ("upload_image", "upload_video", "upload_media"):
+                if hasattr(m, _fn):
+                    setattr(m, _fn, _make_upload_shim(getattr(m, _fn)))
+                    n += 1
             if hasattr(m, "_req"):
                 # rh_reactor 是 (method, path, ...)，其余是 (url, method, ...)
                 fn = m._req
@@ -735,14 +700,18 @@ def _recover_stale_tasks():
 
 
 REGISTRY = {
+    # 注意：registry key 仍叫 zimage_i2i（不重命名），因为历史任务的 params
+    # 里存的就是这个 key，重跑（rerunTask）靠它找回脚本。改 key 会让旧任务重跑失败。
+    # 但功能上已移除图生图：原图生图 App 2112645746440085506 已下线
+    # （/api/webapp/detail 返回 901 WEBAPP_NOT_EXISTS），此入口现在只能文生图。
     "zimage_i2i": {
-        "name": "Zimage 图生图/文生图 (I2I+T2I · App)",
+        "name": "Zimage 文生图 (T2I · App)",
         "label": "Zimage",
         "group": "image",
-        "desc": "走已发布 App 通道。选图=图生图（换装/换风格，保留人物身份），不选图=文生图。主力方案",
-        "module": "rh_zimage_app", "mode": "i2i",
+        "desc": "走已发布 App 通道（zimage文生图 2112630365772128258）。纯文生图：提示词 + 尺寸 + 步数。"
+                "图生图功能已移除。",
+        "module": "rh_zimage_app", "mode": "t2i",
         "params": [
-            {"k": "ref_image", "label": "参考图", "type": "ref", "accepts": "image", "def": "", "help": "不选 = 文生图（走 zimage文生图 App）"},
             {"k": "resolution", "label": "分辨率", "type": "select", "options": [
                 {"v": "768x1368", "label": "768×1368（竖屏 9:16 · 省币）"},
                 {"v": "1080x1920", "label": "1080×1920（竖屏 9:16 · 推荐）"},
@@ -752,9 +721,6 @@ REGISTRY = {
                 {"v": "1920x1080", "label": "1920×1080（横屏 16:9 · 高清）"},
             ], "def": "1080x1920"},
             {"k": "steps", "label": "步数", "type": "int", "def": 6, "help": "turbo 蒸馏模型，6 步足够；8-10 细节略多但更慢"},
-            {"k": "denoise", "label": "重绘强度", "type": "float", "def": 0.65, "help": "仅图生图生效。0.4-0.5 轻度改 / 0.65 换装保留人物 / 0.85+ 结构漂移"},
-            {"k": "lora_a", "label": "LoRA 位A · 瑶光位", "type": "lora_name", "def": False, "def_strength": 0.3, "placeholder": "留空=沿用 Kook_Zimage_瑶光；可填真实文件名或短名", "help": "仅图生图生效。接在 UNET 之后，运行时替换任意 LoRA。短名可填 charm / nofilter / flowdpo / model / peach / zanime"},
-            {"k": "lora_b", "label": "LoRA 位B · 如梦位", "type": "lora_name", "def": False, "def_strength": 0.25, "placeholder": "留空=沿用 Kook_Zimage_如梦似幻；可填真实文件名或短名", "help": "仅图生图生效。接在位A 之后"},
             {"k": "seed", "label": "随机种子", "type": "text", "def": "", "placeholder": "留空 = 随机（App 未暴露，仅记录）", "group": "advanced"},
         ],
     },
@@ -1091,6 +1057,13 @@ def _task_lastframe(tid):
 
 def _run_task(task_id, script_key, params):
     cfg = REGISTRY[script_key]
+    # 兜底拦截：/api/submit、/api/task/resubmit、启动时 stale 恢复三条路径都汇到这里
+    if script_key in HIDDEN_SCRIPTS:
+        with _lock:
+            TASKS[task_id]["status"] = "failed"
+            TASKS[task_id]["error"] = f"脚本「{script_key}」已暂停使用，代码保留待后续恢复"
+        _save_state()
+        return
     try:
         mod = _load_module(cfg["module"])
         # 提交成功立即持久化 pid（on_submit 回调：pid 永不丢，app 被杀也能续）
@@ -1168,42 +1141,34 @@ def _run_task(task_id, script_key, params):
                 raise RuntimeError("动作迁移需要源视频（从出图产物选一段）")
             if not ref_path:
                 raise RuntimeError("动作迁移需要参考图（素材库选一张）")
-            # 分辨率 "宽x高"
-            w, h = 480, 832
-            res_s = str(params.get("resolution") or "").strip().lower()
-            if "x" in res_s:
-                try:
-                    w, h = (int(x) for x in res_s.split("x")[:2])
-                except ValueError:
-                    pass
-            compare = str(params.get("compare", "")).lower() in ("true", "1", "on")
+            # 分辨率：画布内按源视频宽高比自动决定（横屏 832x480 / 竖屏 480x832）
+            # rh_wan22.run() 不接受 width/height/compare/seed/steps —— App 只暴露
+            # 57.image / 63.video / 190.prompt / 216.int 四个字段，传多余参数会 TypeError
             face_enhance = str(params.get("face_enhance", "true")).lower() in ("true", "1", "on")
-            seed_s = str(params.get("seed") or "").strip()
-            try:
-                seed = int(seed_s) if seed_s else None
-            except ValueError:
-                seed = None
-            try:
-                steps = int(params.get("steps", 6))
-            except (TypeError, ValueError):
-                steps = 6
+            res_s = str(params.get("resolution") or "").strip()
+            if res_s:
+                print(f"[wan22] 分辨率由源视频自动决定，忽略参数 resolution={res_s}")
             with _lock:
                 TASKS[task_id]["status"] = "submitting"
             res = mod.run(
                 ref_image_path=ref_path,
                 ref_video_path=video_path,
-                width=w, height=h,
                 prompt_text=(params.get("prompt") or "").strip() or None,
                 face_enhance=face_enhance,
-                compare=compare,
-                seed=seed, steps=steps,
                 download_dir=str(OUT_DIR),
                 on_submit=_on_submit,
             )
-            videos = res.get("videos", []) or []
+            # rh_wan22.run() 会把 zip 也下载下来：files 是【本地路径】列表，videos/archives 已按类型分好
+            files = res.get("files") or (list(res.get("videos") or []) + list(res.get("archives") or []))
+            if not files:
+                raise RuntimeError("任务完成但未取到任何产物（检查产物是否已同步到产物列表）")
+            # wan22 可能同时产出 mp4 与 zip；zip 解包后仍优先用视频当封面
+            files = _unpack_zip_outputs(files)
+            _vid = next((f for f in files if str(f).lower().endswith((".mp4", ".webm", ".mov"))), None)
             with _lock:
-                TASKS[task_id].update({"status": "done", "image": videos[0] if videos else None,
-                                       "files": videos, "pid": res.get("prompt_id"), "error": None})
+                TASKS[task_id].update({"status": "done", "image": _vid or (files[0] if files else None),
+                                       "files": files, "pid": res.get("task_id") or res.get("prompt_id"),
+                                       "error": None})
             _save_state()
             return
 
@@ -1307,7 +1272,7 @@ def _run_task(task_id, script_key, params):
                 verbose=False,
                 **lora_kw,
             )
-            saved = [os.path.basename(p) for p in (res.get("saved") or [])]
+            saved = _unpack_zip_outputs(res.get("saved") or [])
             with _lock:
                 TASKS[task_id].update({
                     "status": "done", "image": saved[0] if saved else None,
@@ -1317,9 +1282,13 @@ def _run_task(task_id, script_key, params):
             return
 
         if script_key == "zimage_i2i":
-            ref = params.get("ref_image") or ""
-            # 有参考图 → 图生图 App；无 → 文生图 App
-            ref_path = _resolve_ref_path(ref)
+            # 只走文生图。图生图分支已移除：原 App 2112645746440085506 下线。
+            # 历史任务若带 ref_image，_resolve_ref_path 仍会解析，但这里不再使用——
+            # 因为那类任务重跑不可能成功（App 不存在），不如直接报错说明清楚。
+            if params.get("ref_image"):
+                raise RuntimeError(
+                    "zimage 图生图已移除（原 App 2112645746440085506 已从平台下线）。"
+                    "如需图生图请改用 Krea2（支持参考图）。")
             seed_s = str(params.get("seed") or "").strip()
             try:
                 seed = int(seed_s) if seed_s else None
@@ -1337,31 +1306,16 @@ def _run_task(task_id, script_key, params):
             height = _h or int(params.get("height", 1920))
             with _lock:
                 TASKS[task_id]["status"] = "submitting"
-            # LoRA：前端 lora_name 控件提交 {k}_name 与 {k}_strength
-            # name 为空 = 不传该字段，后端沿用 App 发布时的默认 LoRA
-            _la = str(params.get("lora_a_name") or "").strip()
-            _lb = str(params.get("lora_b_name") or "").strip()
-            _lora_kw = {}
-            if _la:
-                _lora_kw["lora_name"] = _la
-                _lora_kw["lora_strength"] = float(params.get("lora_a_strength", 0.3))
-            if _lb:
-                _lora_kw["lora_name_b"] = _lb
-                _lora_kw["lora_strength_b"] = float(params.get("lora_b_strength", 0.25))
-            # rh_zimage_app.run 内部按 ref_image_path 自动选 App
-            res = mod.run(
+            res = mod.run_t2i(
                 prompt_text=prompt,
-                ref_image_path=ref_path,
                 width=width,
                 height=height,
                 steps=int(params.get("steps", 6)),
-                denoise=float(params.get("denoise", 0.65)),
                 download_dir=str(OUT_DIR),
                 on_submit=_on_submit,
                 verbose=False,
-                **_lora_kw,
             )
-            saved = [os.path.basename(p) for p in (res.get("saved") or [])]
+            saved = _unpack_zip_outputs(res.get("saved") or [])
             with _lock:
                 TASKS[task_id].update({
                     "status": "done", "image": saved[0] if saved else None,
@@ -1383,7 +1337,7 @@ def _run_task(task_id, script_key, params):
                 on_submit=_on_submit,
                 verbose=False,
             )
-            saved = [os.path.basename(p) for p in (res.get("saved") or [])]
+            saved = _unpack_zip_outputs(res.get("saved") or [])
             with _lock:
                 TASKS[task_id].update({
                     "status": "done", "image": saved[0] if saved else None,
@@ -1430,7 +1384,7 @@ def _run_task(task_id, script_key, params):
                 download_dir=str(OUT_DIR),
                 on_submit=_on_submit,
             )
-            saved = [os.path.basename(p) for p in (res.get("saved") or [])]
+            saved = _unpack_zip_outputs(res.get("saved") or [])
             with _lock:
                 TASKS[task_id].update({
                     "status": "done", "image": saved[0] if saved else None,
@@ -1541,7 +1495,9 @@ def _check_pid_status(pid, mod=None):
     import urllib.error
     key = _get_api_key()
     if not key:
-        return {"status": "api_error", "detail": "未配置 API Key"}
+        return {"status": "api_error",
+                "detail": "该任务的 pid 属于 /proxy 通道，需要 API Key 才能查；"
+                          "当前已切换为账号通道，建议在任务列表手动「错误查询」或重跑"}
 
     # ---- 1. /history/<pid>：成功 / 执行失败 / 已入 history 的进行中 ----
     try:
@@ -1585,6 +1541,67 @@ def _check_pid_status(pid, mod=None):
     return {"status": "not_found", "detail": "远端无此任务"}
 
 
+def _unpack_zip_outputs(saved, keep_zip=True):
+    """把产物里的 zip 解包，返回【最终产物文件名列表】。
+
+    背景：krea2 / zimage / moss 等图片工作流已改成 CompressImages 只出 zip，
+    目的是绕开平台下载管道的水印 + AIGC 注入。但 webui 前端只会把产物
+    当图片渲染（<img src=/images/xxx>），zip 进去就是破图。
+    所以在落盘这一层统一解包，让前端拿到的仍是 png。
+
+    两个必须处理的坑：
+      1. zip 内成员名固定是 image_00000.png —— 多个任务的产物会互相覆盖。
+         这里按 zip 主名重命名：krea2_zip_00001_xxx_1793.zip
+                         → krea2_zip_00001_xxx_1793.png
+      2. 解包失败不能把整个任务判死 —— 原 zip 还在，直接返回它，
+         至少用户能手动下载。
+
+    keep_zip=True 时保留 zip 文件本身（详情页可下载原件），
+    但【不放进返回列表】，避免前端又把 zip 当图片渲染。
+    """
+    import zipfile
+    out = []
+    for raw in (saved or []):
+        name = os.path.basename(str(raw))
+        if not name.lower().endswith(".zip"):
+            if name not in out:
+                out.append(name)
+            continue
+        zp = OUT_DIR / name
+        if not zp.exists():
+            # zip 不存在（异常情况），原样保留但不添加，避免前端 404
+            continue
+        try:
+            with zipfile.ZipFile(zp) as z:
+                members = [m for m in z.namelist()
+                           if not m.endswith("/") and not m.startswith("__MACOSX/")]
+                extracted = []
+                stem = name[:-4]  # 去掉 .zip
+                for m in members:
+                    ext = os.path.splitext(m)[1] or ".png"
+                    # 单成员 → 直接用 zip 主名；多成员 → 追加序号避免覆盖
+                    if len(members) == 1:
+                        target = stem + ext
+                    else:
+                        target = "%s_%02d%s" % (stem, len(extracted), ext)
+                    data = z.read(m)
+                    (OUT_DIR / target).write_bytes(data)
+                    extracted.append(target)
+                if extracted:
+                    for t in extracted:
+                        if t not in out:
+                            out.append(t)
+                else:
+                    # 空包（22 字节那种），保留 zip 让用户能察觉异常
+                    if name not in out:
+                        out.append(name)
+        except Exception as e:
+            print("[zip] 解包失败 %s: %s" % (name, e))
+            if name not in out:
+                out.append(name)
+    return out
+
+
 def _download_from_entry(task_id, mod, entry, pid):
     """从 history entry 提取产物并落盘到 OUT_DIR，任务转 done"""
     saved = []
@@ -1598,6 +1615,8 @@ def _download_from_entry(task_id, mod, entry, pid):
             p = mod.download_output(out, str(OUT_DIR))
             if p and os.path.basename(p) not in saved:
                 saved.append(os.path.basename(p))
+    # 续跑/轮询路径同样要解 zip，否则任务卡片还是破图
+    saved = _unpack_zip_outputs(saved)
     with _lock:
         TASKS[task_id].update({"status": "done", "image": saved[0] if saved else None,
                                "files": saved, "pid": pid, "error": None})
@@ -1613,7 +1632,8 @@ def _claim_runaway_pid(task_id, script_key):
     import urllib.request
     key = _get_api_key()
     if not key:
-        return {"ok": False, "pid": None}
+        # /proxy 的 /queue /history 需要 API Key；账号通道下不走这条认领逻辑
+        return {"ok": True, "pid": None}
     used = {str(t.get("pid")) for t in TASKS.values() if t.get("pid")}
     cands = []
     probe_ok = False
@@ -1982,28 +2002,11 @@ class Handler(BaseHTTPRequestHandler):
                                  "group": v.get("group") or ("video" if v.get("mode") == "video" else "image"),
                                  "hint": v.get("hint") or "",
                                  "desc": v["desc"], "mode": v["mode"], "params": v["params"]}
-                             for k, v in REGISTRY.items()})
+                              for k, v in _visible_registry().items()})
         elif path == "/api/refs":
             self._send(200, {"refs": _list_refs(), "outputs": _list_outputs()})
         elif path == "/api/balance":
             self._send(200, _query_balance())
-        elif path == "/api/market":
-            q = parse_qs(u.query)
-            page = int((q.get("page") or ["1"])[0])
-            size = int((q.get("size") or ["12"])[0])
-            tag = (q.get("tag") or [None])[0]
-            kw = (q.get("kw") or [None])[0]
-            sort = (q.get("sort") or [None])[0]
-            self._send(200, _market_list(page=page, size=size, tag=tag, keyword=kw, sort=sort))
-        elif path == "/api/market/tags":
-            self._send(200, _market_tags())
-        elif path == "/api/market/detail":
-            q = parse_qs(u.query)
-            wid = (q.get("id") or [""])[0]
-            if not wid:
-                self._send(400, {"error": "缺少 id"})
-                return
-            self._send(200, _market_detail(wid))
         elif path == "/api/settings":
             key = _get_api_key()
             llm = _get_llm_cfg()
@@ -2076,6 +2079,9 @@ class Handler(BaseHTTPRequestHandler):
                     if _t.get("status") != "done" or not _t.get("image"):
                         continue
                     nm = os.path.basename(str(_t["image"]))
+                    # 历史任务可能还指着 zip（本版之前落盘的），背景图要跳过
+                    if nm.lower().endswith(".zip"):
+                        continue
                     if not (OUT_DIR / nm).exists():
                         continue
                     ts = _t.get("ts") or 0
@@ -2154,24 +2160,6 @@ class Handler(BaseHTTPRequestHandler):
                                  "need_login": True})
                 return
 
-        if path == "/api/market/submit":
-            if _has_active_task():
-                self._send(400, {"error": "已有任务在运行，请等待完成后再提交"})
-                return
-            try:
-                data = json.loads(raw.decode() or "{}")
-            except Exception:
-                self._send(400, {"error": "bad json"})
-                return
-            wid = str(data.get("webapp_id") or "").strip()
-            vals = data.get("node_values") or {}
-            wh = str(data.get("webhook") or "").strip() or None
-            it = str(data.get("instance_type") or "default").strip() or "default"
-            if not wid:
-                self._send(400, {"error": "缺少 webapp_id"})
-                return
-            r = _market_submit(wid, vals, webhook=wh, instance_type=it)
-            self._send(200, r)
         elif path == "/api/submit":
             if _has_active_task():
                 self._send(400, {"error": "已有任务在运行，请等待完成后再提交"})
@@ -2184,6 +2172,9 @@ class Handler(BaseHTTPRequestHandler):
             script_key = data.get("script")
             if script_key not in REGISTRY:
                 self._send(400, {"error": f"未知脚本 {script_key}"})
+                return
+            if script_key in HIDDEN_SCRIPTS:
+                self._send(400, {"error": f"脚本「{script_key}」已暂停使用，代码保留待后续恢复"})
                 return
             with _lock:
                 TASK_SEQ[0] += 1
@@ -2356,8 +2347,10 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 data = json.loads(raw.decode() or "{}")
                 cfg = _load_config()
-                # RunningHub key
-                if "api_key" in data:
+                # RunningHub key（通道已断开：接受但忽略，不写入）
+                if "api_key" in data and API_CHANNEL_DISABLED:
+                    pass
+                elif "api_key" in data:
                     key = str(data.get("api_key") or "").strip()
                     if not key:
                         # 空串不覆盖已存 key（避免误清空）
@@ -2562,11 +2555,11 @@ if __name__ == "__main__":
     # session 通道：配了会话就把 openapi 请求翻译成网页端调用（计入运行次数/收益）
     _n_shim, _armed = _install_session_channel()
     if _armed:
-        print(f"  通道: session（已接管 {_n_shim} 处请求，计入 App 运行次数）")
-    elif _get_api_key():
-        print("  通道: API Key（未配会话，本次调用不计入运行次数）")
+        print(f"  通道: 账号（session，已接管 {_n_shim} 处请求）")
     else:
-        print("  通道: 未配置（需要 API Key 或网页版会话）")
+        print("  通道: 未登录 —— 请先在设置页导入网页会话，否则无法提交任务")
+    if _get_api_key():
+        print("  提示: 检测到 api_key 配置，但已不再使用（全链路走账号）")
     _load_state()  # BASE 已确定，恢复历史任务
     _recover_stale_tasks()  # 自动复核上次进程遗留的『假活』任务
     ThreadingHTTPServer(("0.0.0.0", a.port), Handler).serve_forever()

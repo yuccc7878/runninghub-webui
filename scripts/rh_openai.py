@@ -73,7 +73,60 @@ def _cfg_file():
 
 
 MODEL = "zimage"
-MODEL_ALIASES = {"zimage", "zimage-t2i", "zimage_t2i"}
+
+# 可用的出图模型。全部走 App 通道（账号认证，不需要 API Key）。
+# 每个模型的字段能力不同，见各自定义。
+MODEL_SPECS = {
+    "zimage": {
+        "module": "rh_zimage_app",
+        "entry": "run_t2i",
+        "app": "2112630365772128258",
+        # 暴露 5.text / 16.value(宽) / 17.value(高) / 4.steps
+        "supports": {"width": True, "height": True, "steps": True},
+        "needs_ratio": False,
+        "label": "Zimage Turbo 文生图",
+    },
+    "krea2": {
+        "module": "rh_krea2_app",
+        "entry": "run_t2i",
+        "app": "2113009215693500417",
+        # 暴露 41.text / 39.value(宽) / 40.value(高) / 36.steps + 3 组 LoRA 强度
+        "supports": {"width": True, "height": True, "steps": True},
+        "needs_ratio": False,
+        "label": "Krea2 文生图",
+    },
+    "moss": {
+        "module": "rh_moss_app",
+        "entry": "run",
+        "app": "2114331355738923010",
+        # App 只暴露 4.text / 23.aspect_ratio / 16.steps。
+        # 但实测 6.EmptyFlux2LatentImage 的 width/height 可直传且优先级高于 ratio，
+        # 所以 size 能精确控制（不再受 8 档比例枚举限制）。
+        "supports": {"width": True, "height": True, "steps": True},
+        "needs_ratio": False,
+        "label": "MOSS 八步加速版",
+    },
+}
+
+MODEL_ALIASES = {
+    "zimage", "zimage-t2i", "zimage_t2i",
+    "krea2", "krea2-t2i", "krea2_t2i",
+    "moss", "moss-t2i", "moss_t2i",
+}
+
+# 别名 → 规范名
+MODEL_CANON = {
+    "zimage": "zimage", "zimage-t2i": "zimage", "zimage_t2i": "zimage",
+    "krea2": "krea2", "krea2-t2i": "krea2", "krea2_t2i": "krea2",
+    "moss": "moss", "moss-t2i": "moss", "moss_t2i": "moss",
+}
+
+# MOSS 的比例枚举（App 只给这 8 个）
+MOSS_RATIOS = [
+    "1:1 (Square)", "2:3 (Portrait Photo)", "3:2 (Photo)",
+    "3:4 (Portrait Standard)", "4:3 (Standard)",
+    "9:16 (Portrait Widescreen)", "16:9 (Widescreen)", "21:9 (Ultrawide)",
+]
 
 # zimage 支持的画布档位（面积最近匹配）
 ZIMAGE_SIZES = {
@@ -182,15 +235,23 @@ def list_lan_ips():
 
 def models(port):
     ips = list_lan_ips()
-    data = [
-        {
-            "id": MODEL,
+    data = []
+    for mid, spec in MODEL_SPECS.items():
+        caps = []
+        if spec["supports"]["width"]:
+            caps.append("size")
+        else:
+            caps.append("ratio(由 size 折算)")
+        if spec["supports"]["steps"]:
+            caps.append("steps")
+        data.append({
+            "id": mid,
             "object": "model",
             "created": 1735689600,
             "owned_by": "runninghub",
-            "description": "Zimage 文生图（走 /v1/images/generations）",
-        }
-    ]
+            "description": "%s（App %s；支持：%s）" % (
+                spec["label"], spec["app"], "、".join(caps)),
+        })
     return {
         "object": "list",
         "server_base": {
@@ -234,6 +295,13 @@ def _inject_key(mod):
     关键：API_KEY 改了还不够，PROXY 是 import 时用旧 key 拼好的字符串，必须一起重建。
     """
     try:
+        # API 通道已断开时不再注入 key（绕开配置文件的读取）
+        try:
+            import rh_webui as _W
+            if getattr(_W, "API_CHANNEL_DISABLED", False):
+                return
+        except Exception:
+            pass
         key = _load_cfg().get("api_key") or ""
         if not key:
             return
@@ -246,25 +314,112 @@ def _inject_key(mod):
         pass
 
 
-def _run_one(prompt, width, height, seed, extra, host):
-    """调 rh_zimage_api.run 跑一张，返回 (本地路径, url)"""
+# ===== 出图通道开关 =====
+# False = 走 rh_zimage_api.run（ComfyUI 原生端点，全参数：steps/seed/denoise/lora）
+#         —— 已改造为会话三件套认证，不需要 API Key，能力不打折
+# True  = 走 rh_zimage_app.run_t2i（App 通道，只有 prompt + 尺寸，参数受限）
+OPENAI_USE_APP_CHANNEL = True
+
+
+def _unzip_first_image(zip_path):
+    """把产物 zip 解出一张图，返回本地路径。失败则返回原 zip 路径。"""
+    import zipfile
+    zp = Path(str(zip_path))
+    if not zp.exists():
+        return zip_path
+    try:
+        with zipfile.ZipFile(zp) as z:
+            imgs = [n for n in z.namelist()
+                    if n.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))]
+            if not imgs:
+                return zip_path
+            member = imgs[0]
+            # 用 zip 主名做唯一名，避免不同 zip 内同名成员互相覆盖
+            out = zp.with_suffix(Path(member).suffix)
+            if out.exists():
+                import time as _t
+                out = zp.parent / (zp.stem + "_" + str(int(_t.time())) + Path(member).suffix)
+            with z.open(member) as src:
+                out.write_bytes(src.read())
+            return str(out)
+    except Exception:
+        return zip_path
+
+
+def size_to_ratio(width, height):
+    """把像素尺寸折算成最接近的比例枚举（MOSS 用）。
+
+    按 |w/h - 目标比例| 取最小误差；同误差取先出现的。
+    """
+    if not width or not height:
+        return MOSS_RATIOS[0]
+    target = float(width) / float(height)
+    best, best_err = MOSS_RATIOS[0], None
+    for opt in MOSS_RATIOS:
+        try:
+            a, b = opt.split(" ")[0].split(":")
+            err = abs(float(a) / float(b) - target)
+        except Exception:
+            continue
+        if best_err is None or err < best_err:
+            best, best_err = opt, err
+    return best
+
+
+def _run_via_app(model, prompt, width, height, extra, out_dir):
+    """按模型分发出图。全部走 App 通道，不需要 API Key。"""
+    import importlib
+    spec = MODEL_SPECS.get(model) or MODEL_SPECS[MODEL]
+    mod = importlib.import_module(spec["module"])
+    entry = getattr(mod, spec["entry"])
+
+    steps = extra.get("steps")
+    kw = {"download_dir": str(out_dir), "verbose": True}
+    if steps and spec["supports"]["steps"]:
+        kw["steps"] = int(steps)
+
+    if spec["supports"]["width"]:
+        kw["width"] = width
+        kw["height"] = height
+    if spec["needs_ratio"]:
+        # 仅当模型不支持精确宽高时，才折算比例
+        kw["ratio"] = extra.get("ratio") or size_to_ratio(width, height)
+    return entry(prompt_text=prompt, **kw)
+
+
+def _run_one(prompt, width, height, seed, extra, host, model=MODEL):
+    """跑一张图，返回 (本地路径, url)。
+
+    通道选择：
+      OPENAI_USE_APP_CHANNEL=True  → rh_zimage_app.run_t2i（App 通道，账号认证）
+      OPENAI_USE_APP_CHANNEL=False → rh_zimage_api.run（/proxy 通道，API Key）
+    """
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import rh_zimage_api as Z
-    _inject_key(Z)
     out_dir = _out_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
-    res = Z.run(
-        prompt_text=prompt,
-        width=width,
-        height=height,
-        seed=seed,
-        download_dir=str(out_dir),
-        **extra,
-    )
+
+    if OPENAI_USE_APP_CHANNEL:
+        res = _run_via_app(model, prompt, width, height, extra, out_dir)
+    else:
+        import rh_zimage_api as Z
+        _inject_key(Z)
+        res = Z.run(
+            prompt_text=prompt,
+            width=width,
+            height=height,
+            seed=seed,
+            download_dir=str(out_dir),
+            **extra,
+        )
     saved = (res or {}).get("saved") or []
     if not saved:
         raise RuntimeError("平台未返回产物文件")
     path = saved[0]
+
+    # App 通道（如 zimage 文生图）直出 zip；OpenAI 规范要求返回图片，
+    # 这里解包取第一张图，避免第三方客户端拿到无法渲染的 zip。
+    if str(path).lower().endswith(".zip"):
+        path = _unzip_first_image(path)
     name = os.path.basename(path)
     _register_history(prompt, width, height, seed, extra, name,
                       (res or {}).get("prompt_id"))
@@ -290,14 +445,14 @@ def _register_history(prompt, width, height, seed, extra, name, pid):
         print(f"[v1] 历史登记失败（不影响出图）: {e}", flush=True)
 
 
-def _run_sync(prompt, width, height, n, fmt, seed, extra, host):
+def _run_sync(prompt, width, height, n, fmt, seed, extra, host, model=MODEL):
     """同步生成 n 张（串行），返回 (http_code, openai_response)"""
     created = int(time.time())
     data = []
     for i in range(n):
         s = seed + i if seed is not None else None
         try:
-            path, url = _run_one(prompt, width, height, s, extra, host)
+            path, url = _run_one(prompt, width, height, s, extra, host, model)
         except Exception as e:
             return 500, {"error": {"message": f"平台生成失败: {e}", "type": "server_error"}}
         if fmt == "b64_json":
@@ -311,12 +466,12 @@ def _run_sync(prompt, width, height, n, fmt, seed, extra, host):
     return 200, {"created": created, "data": data}
 
 
-def _worker(tid, prompt, width, height, n, fmt, seed, extra, host):
+def _worker(tid, prompt, width, height, n, fmt, seed, extra, host, model=MODEL):
     """异步后台线程：跑完写回任务表"""
     with _TASKS_LOCK:
         _TASKS[tid]["status"] = "running"
     try:
-        code, resp = _run_sync(prompt, width, height, n, fmt, seed, extra, host)
+        code, resp = _run_sync(prompt, width, height, n, fmt, seed, extra, host, model)
         with _TASKS_LOCK:
             if code == 200:
                 _TASKS[tid]["status"] = "done"
@@ -335,9 +490,14 @@ def generate(body, headers, host):
     ok, msg = check_auth(headers)
     if not ok:
         return 401, {"error": {"message": msg, "type": "authentication_error"}}
-    model = (body.get("model") or MODEL)
+    model = (body.get("model") or MODEL).strip()
     if model not in MODEL_ALIASES:
-        return 400, {"error": {"message": f"Unknown model '{model}'", "type": "invalid_request_error", "param": "model"}}
+        avail = ", ".join(sorted(MODEL_SPECS.keys()))
+        return 400, {"error": {
+            "message": f"Unknown model '{model}'. Available: {avail}",
+            "type": "invalid_request_error", "param": "model"}}
+    # 别名归一（zimage-t2i → zimage）
+    model = MODEL_CANON.get(model, model)
     prompt = body.get("prompt")
     if not prompt or not str(prompt).strip():
         return 400, {"error": {"message": "Missing required parameter: prompt", "type": "invalid_request_error", "param": "prompt"}}
@@ -362,10 +522,10 @@ def generate(body, headers, host):
         with _TASKS_LOCK:
             _TASKS[tid] = {"status": "queued", "created": int(time.time()), "data": None, "error": None}
         threading.Thread(target=_worker,
-                         args=(tid, prompt, width, height, n, fmt, seed, extra, host),
+                         args=(tid, prompt, width, height, n, fmt, seed, extra, host, model),
                          daemon=True).start()
         return 200, {"task_id": tid, "status": "queued"}
-    return _run_sync(prompt, width, height, n, fmt, seed, extra, host)
+    return _run_sync(prompt, width, height, n, fmt, seed, extra, host, model)
 
 
 def task_status(tid):
